@@ -86,16 +86,17 @@ using ElementB = cutlass::float_e2m1_t;  // NVFP4
 using ElementC = float;                   // FP32 accumulator
 using ElementScale = cutlass::float_e4m3_t;  // FP8 E4M3 block scales
 
-// Kernel definition
-using Kernel = cutlass::gemm::device::GemmUniversal<
-    ElementA, cutlass::layout::RowMajor,
-    ElementB, cutlass::layout::ColumnMajor,
-    ElementC, cutlass::layout::RowMajor,
-    float,  // accumulator type
-    cutlass::arch::OpClassTensorOp,
-    cutlass::arch::Sm100,
-    TileShape, ClusterShape, Schedule
+// Kernel definition. SM100 uses the CUTLASS 3.x API: the element types,
+// layouts, tile shape, cluster shape and schedule above are inputs to the
+// CollectiveBuilders; kernel::GemmUniversal itself takes only the problem
+// shape, the two collectives and the scheduler tag.
+using GemmKernel = cutlass::gemm::kernel::GemmUniversal<
+    cute::Shape<int, int, int, int>,   // ProblemShape <M,N,K,L>
+    CollectiveMainloop,
+    CollectiveEpilogue,
+    void                               // default CLC tile scheduler
 >;
+using Kernel = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
 ```
 
 ## Warp-Specialized Kernel Structure
@@ -126,6 +127,10 @@ __global__ void nvfp4_gemm_kernel(
     int warp_id = threadIdx.x / 32;
     int lane_id = threadIdx.x % 32;
 
+    // Broadcast so every warp sees the accumulator, and so the deallocation
+    // can happen after the epilogue rather than inside the MMA branch.
+    __shared__ uint32_t tmem_addr;
+
     if (warp_id == 0 && lane_id == 0) {
         // TMA producer warp: async bulk loads
         for (int k = 0; k < K; k += BLOCK_K) {
@@ -143,32 +148,55 @@ __global__ void nvfp4_gemm_kernel(
             );
             // Similarly for B, sfa, sfb
         }
-    } else if (warp_id == 1 && lane_id == 0) {
-        // MMA consumer warp: tcgen05.mma
-        uint32_t tmem_addr = tmem_alloc_cta(256);  // 256 TMEM columns
+    } else if (warp_id == 1) {
+        // MMA consumer warp. The whole warp enters: tcgen05.alloc is
+        // .sync.aligned and needs all 32 lanes, while only lane 0 issues the MMA.
+        tmem_addr = tmem_alloc_cta(256);  // 256 TMEM columns
 
         for (int k = 0; k < K; k += BLOCK_K) {
             int stage = (k / BLOCK_K) % NUM_STAGES;
             // Wait for TMA to complete this stage
             mbarrier_wait(&smem->mbarrier[stage]);
 
-            // tcgen05.mma with native block scaling
-            // Reads A/B from SMEM, accumulates into TMEM
+            if (lane_id != 0) continue;  // tcgen05.mma is single-thread
+
+            // tcgen05.mma with native block scaling (NVFP4 -> .kind::mxf4nvf4)
+            // Reads A/B from SMEM, scale factors from TMEM, accumulates into TMEM
+            // enable-input-d is a .pred operand, so it is derived with setp
             asm volatile(
-                "tcgen05.mma.cta_group::1.kind::f8f6f4"
-                " [%0], %1, %2, %3, %4;"
+                "{\n\t.reg .pred p;\n\tsetp.ne.b32 p, %6, 0;\n\t"
+                "tcgen05.mma.cta_group::1.kind::mxf4nvf4.block_scale.scale_vec::4X"
+                " [%0], %1, %2, %3, [%4], [%5], p;\n\t}\n"
                 :: "r"(tmem_addr),
-                   "l"((uint64_t)&smem->A_smem[stage]),
-                   "l"((uint64_t)&smem->B_smem[stage]),
-                   "r"(packed_scales),
-                   "n"(1)  // scale_D enabled
+                   "l"(make_smem_desc(&smem->A_smem[stage])),
+                   "l"(make_smem_desc(&smem->B_smem[stage])),
+                   "r"(idesc),
+                   "r"(sfa_tmem_addr), "r"(sfb_tmem_addr),
+                   "r"(1)  // enable-input-d source for setp
             );
         }
 
-        // Signal epilogue warps
+        // Order this warp's TMEM writes before the CTA-wide rendezvous below,
+        // so the epilogue warps observe the finished accumulator.
+        asm volatile("tcgen05.fence::before_thread_sync;");
     } else {
         // Epilogue warps: read from TMEM, apply global scales, store to C
         // tmem -> registers -> global
+    }
+
+    // TMEM lifecycle. The accumulator may only be released once the epilogue
+    // warps have finished reading it -- deallocating at the end of the MMA
+    // branch would race with those reads, because __syncwarp() orders only
+    // the MMA warp itself. This CTA-wide barrier is the point at which no
+    // Tensor Memory access is still outstanding.
+    __syncthreads();
+
+    // Every tcgen05.alloc must be matched by a tcgen05.dealloc before the
+    // kernel exits (PTX ISA 9.3 section 9.7.17.7.1). tcgen05.dealloc is
+    // .sync.aligned like the allocation, so the whole allocating warp must
+    // reach it -- not just lane 0.
+    if (warp_id == 1) {
+        tmem_dealloc_cta(tmem_addr, 256);
     }
 }
 ```
@@ -188,12 +216,22 @@ static_assert(K % 256 == 0, "K must align to 128 bytes for FP4 TMA");
 static_assert((K / 16) % 128 == 0, "Scale array must align to 128 bytes");
 ```
 
-## Scale Factor Conversion
+## Scale Factor Handling
 
-The tcgen05.mma instruction expects UE8M0 (unsigned power-of-two exponent only) scales, but NVFP4 uses FP8 E4M3 (non-power-of-two). Conversion is needed:
+NVFP4's UE4M3 block scales are consumed **natively** by tcgen05: the
+`.kind::mxf4nvf4` variant with `.scale_vec::4X` (block size 16) accepts UE4M3
+scale factors directly from TMEM — this is the path used by the kernel above.
+No conversion to UE8M0 is required, and none should be introduced: rounding a
+UE4M3 scale to the nearest power of two throws away precision for nothing.
+
+Conversion is only needed when targeting an MX kind instead:
+`.kind::mxf4` and `.kind::mxf8f6f4` take UE8M0 scales over blocks of 32
+elements, so NVFP4 data (16-element blocks, UE4M3) must be requantized before
+it can be fed to those variants.
 
 ```cpp
-// Convert FP8 E4M3 block scales to UE8M0 for tcgen05.mma hardware
+// Only for the MX path (.kind::mxf4 / .kind::mxf8f6f4), which takes UE8M0.
+// The NVFP4 path (.kind::mxf4nvf4 + .scale_vec::4X) skips this entirely.
 // E4M3: 4 exponent bits, 3 mantissa bits (non-power-of-two)
 // UE8M0: 8 exponent bits, 0 mantissa bits (power-of-two only)
 __device__ uint32_t pack_scales_ue8m0(
@@ -226,7 +264,9 @@ Problem 2 top performers (geometric mean across benchmark configs):
 ## Caveats
 
 - SM100/SM100a only -- no Hopper support for native FP4 tensor core instructions
-- Scale factor conversion (E4M3 to UE8M0) adds overhead if not precomputed
+- Scale factors must be staged into TMEM before the MMA; only the MX path
+  (`.kind::mxf4` / `.kind::mxf8f6f4`) additionally needs an E4M3→UE8M0
+  requantization, which costs both time and accuracy if not precomputed
 - TMA requires 128-byte alignment for all operands
 - TMEM size (128x512 per SM) limits maximum output tile to 128 rows x 512 cols (32-bit)
 

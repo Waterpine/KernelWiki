@@ -97,8 +97,10 @@ Unlike Problem 1 (memory-bound GEMV), GEMM fully leverages Blackwell tensor core
 // No ldmatrix needed -- operands read from SMEM, results written to TMEM
 tcgen05.mma.cta_group::1.kind::f16
     [tmem_addr],        // accumulator in TMEM
-    [smem_desc_a],      // operand A descriptor (shared memory)
-    [smem_desc_b];      // operand B descriptor (shared memory)
+    desc_a, desc_b,     // 64-bit SMEM matrix descriptors for A and B
+    idesc,              // 32-bit instruction descriptor
+    {m0, m1, m2, m3},   // disable-output-lane vector (4 for cta_group::1)
+    p;                  // enable-input-d predicate
 ```
 
 Key Blackwell advantage: tcgen05.mma reads operands directly from shared memory and writes results to tensor memory (TMEM), eliminating the register-based ldmatrix/stmatrix pipeline required on Hopper.
@@ -170,14 +172,14 @@ using CollectiveMainloop = typename cutlass::gemm::collective::CollectiveBuilder
 
 ## Performance Context
 
-On B200 (142 SMs, peak FP4 tensor TFLOPS):
+On B200 (148 SMs, peak FP4 tensor TFLOPS):
 - Top performers achieved near-cuBLAS performance for NVFP4 GEMM
 - The ~10.8us geometric mean represents excellent tensor core utilization
 - Key differentiator from Problem 1: this is compute-bound, so tensor core scheduling and pipeline depth matter more than memory access patterns
 
 ## B200 Hardware Used
 
-- sm_100a, 142 SMs
+- sm_100a, 148 SMs
 - TMEM: 256KB per SM (128 rows x 512 cols x 32-bit)
 - tcgen05.mma with native NVFP4 support
 - TMA with 128-byte alignment

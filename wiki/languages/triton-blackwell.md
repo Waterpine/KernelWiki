@@ -30,7 +30,7 @@ When to use Triton on Blackwell:
 - Warp-specialized descriptor/TMA matmul kernels following the Triton persistent matmul tutorial pattern
 
 Use CuTe-DSL / CUTLASS / FA-4 / TRT-LLM instead when:
-- Peak-performance compute-bound matmul or attention on Blackwell. SGLang `pr-sglang-5390` measured a CUTLASS `tcgen05_mla` backend ~27% faster than the Triton MLA decode baseline on Blackwell.
+- Peak-performance compute-bound matmul or attention on Blackwell. SGLang `pr-sglang-5390` measured a CUTLASS `cutlass_mla` backend ~27% faster than the Triton MLA decode baseline on Blackwell.
 - Production routing where vendor kernels are mature: SGLang `pr-sglang-21595` changes Blackwell datacenter multimodal attention default from `triton_attn` to FA-4.
 
 ## Triton 3.6+ Blackwell path

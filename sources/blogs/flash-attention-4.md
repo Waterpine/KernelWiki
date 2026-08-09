@@ -50,11 +50,12 @@ __device__ __forceinline__ float sw_exp2(float x) {
     int n = __float2int_rn(x);
     float r = x - (float)n;
     // Horner-scheme polynomial for 2^r, r in [-0.5, 0.5]
-    float p = 0x1.62e430p-1f;                // ~ ln(2)
-    p = fmaf(p, r, 0x1.ebfc1ep-3f);
-    p = fmaf(p, r, 0x1.c6af98p-5f);
-    p = fmaf(p, r, 0x1.3b2c9cp-7f);
-    p = fmaf(p, r, 0x1.62e43ap-10f);
+    // Horner runs from the highest-order coefficient down to ln(2)
+    float p = 0x1.62e43ap-10f;               // c5
+    p = fmaf(p, r, 0x1.3b2c9cp-7f);          // c4
+    p = fmaf(p, r, 0x1.c6af98p-5f);          // c3
+    p = fmaf(p, r, 0x1.ebfc1ep-3f);          // c2
+    p = fmaf(p, r, 0x1.62e430p-1f);          // c1 ~ ln(2)
     float y = fmaf(r, p, 1.0f);
     // Scale by 2^n via direct FP32 bit manipulation
     int bits = __float_as_int(y) + (n << 23);
@@ -85,7 +86,16 @@ for (int tile = 0; tile < Q_tiles; tile += 2) {
 ```cuda
 // 2-CTA cooperative backward: paired CTAs in a cluster share a single TMEM
 // accumulator half, halving SMEM traffic for dK/dV accumulation.
+// cta_group::2 takes an 8-element disable-output-lane vector;
+// enable-input-d is a predicate.
+uint32_t mask[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 asm volatile(
-    "tcgen05.mma.cta_group::2.kind::f16 [%0], %1, %2, %3, 1;"
-    : : "r"(tmem_acc_shared), "l"(desc_a), "l"(desc_b), "r"(0));
+    "{\n"
+    ".reg .pred p;\n"
+    "setp.ne.b32 p, %4, 0;\n"
+    "tcgen05.mma.cta_group::2.kind::f16 [%0], %1, %2, %3, {%5, %6, %7, %8, %9, %10, %11, %12}, p;\n"
+    "}\n"
+    : : "r"(tmem_acc_shared), "l"(desc_a), "l"(desc_b), "r"(0), "r"(1),
+        "r"(mask[0]), "r"(mask[1]), "r"(mask[2]), "r"(mask[3]),
+        "r"(mask[4]), "r"(mask[5]), "r"(mask[6]), "r"(mask[7]));
 ```

@@ -8,7 +8,7 @@ confidence: source-reported
 reproducibility: snippet
 prerequisites: [hw-nvfp4]
 related: [hw-nvfp4, kernel-deepgemm, technique-fine-grained-quantization]
-sources: [blog-deepgemm, doc-nvidia-tuning-guide, pr-vllm-23696]
+sources: [blog-deepgemm, doc-nvidia-tuning-guide, doc-ptx-isa-sm100, pr-vllm-23696]
 blackwell_relevance: "Blackwell tcgen05 has native UE8M0 block scaling; Hopper requires external CUDA core promotion (Nc=128)."
 ---
 
@@ -154,8 +154,8 @@ On Blackwell, tcgen05.mma supports native block scaling via the UE8M0 (unsigned 
 // Scale format: UE8M0 = pure power-of-two scale (2^exponent)
 // Packed: 4 UE8M0 values per 32-bit integer
 
-// DeepGEMM SM100 kernel: scale_A and scale_B are UE8M0 packed
-// tcgen05.mma applies scales automatically during accumulation
+// DeepGEMM SM100 kernel: scale_A and scale_B are UE8M0 packed and staged
+// into TMEM; tcgen05.mma applies them during accumulation
 
 struct BlockScaleDescriptor {
     // 4 UE8M0 scale values packed into one uint32
@@ -167,32 +167,32 @@ struct BlockScaleDescriptor {
 };
 
 // PTX for tcgen05.mma with block scaling:
-// The .scale modifier tells the hardware to apply UE8M0 scales
-// from a designated SMEM region alongside the MMA operands
+// The .block_scale qualifier tells the hardware to apply the scale
+// factors held in Tensor Memory alongside the MMA operands
 ```
 
 ```ptx
 // tcgen05.mma with native block scaling (Blackwell PTX)
-// This instruction applies UE8M0 scales from SMEM during MMA
-tcgen05.mma.cta_group::1.kind::f8f6f4
-    [%tmem_addr],           // TMEM accumulator destination
-    [%desc_a],              // SMEM descriptor for A operand
-    [%desc_b],              // SMEM descriptor for B operand
-    %scale_d,               // Scale descriptor for D (output)
-    %enable_mask,
-    [%scale_a_smem],        // UE8M0 scales for A in SMEM
-    [%scale_b_smem];        // UE8M0 scales for B in SMEM
+// Scale factors are read from Tensor Memory, not shared memory
+tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale
+    [%tmem_addr],           // TMEM accumulator destination (d-tmem)
+    %desc_a,                // SMEM descriptor for A operand (a-desc)
+    %desc_b,                // SMEM descriptor for B operand (b-desc)
+    %idesc,                 // 32-bit instruction descriptor
+    [%scale_a_tmem],        // scale-A-tmem: UE8M0 scales for A in TMEM
+    [%scale_b_tmem],        // scale-B-tmem: UE8M0 scales for B in TMEM
+    %enable_input_d;        // predicate: D = A*B + D vs D = A*B
 ```
 
 ## UE8M0 vs E4M3 Scale Formats
 
-| Property | UE8M0 (Blackwell native) | E4M3 (NVFP4 hackathon) | FP32 (DeepGEMM Hopper) |
+| Property | UE8M0 (MX standard) | UE4M3 (NVFP4) | FP32 (DeepGEMM Hopper) |
 |----------|-------------------------|------------------------|------------------------|
 | Bits | 8 | 8 | 32 |
-| Representable values | Powers of 2 only | 240 distinct values | Full FP32 range |
-| Range | 2^-127 to 2^128 | ~0 to 448 | Full FP32 |
+| Representable values | Powers of 2 only | 127 finite encodings (7-bit; 0x7f is NaN) | Full FP32 range |
+| Range | 2^-127 to 2^127 | ~0 to 448 | Full FP32 |
 | Block size | 32 (MXFP standard) | 16 (NVFP4) | 128 (DeepGEMM) |
-| Hardware support | tcgen05.mma native | Software decode | Software promotion |
+| Hardware support | tcgen05.mma native (`.kind::mxf8f6f4`, `.kind::mxf4`) | tcgen05.mma native (`.kind::mxf4nvf4` + `.scale_vec::4X`) | Software promotion |
 | Precision impact | Coarser (power-of-2 only) | Fine (non-power-of-2) | Best (FP32) |
 
 ## NVFP4 Two-Level Scaling
@@ -235,4 +235,4 @@ __device__ float dequant_nvfp4(
 - UE8M0 scales are power-of-two only. Non-power-of-two distributions (common in activations) lose precision compared to E4M3 or FP32 scales.
 - Smaller block sizes (16 for NVFP4 vs 128 for DeepGEMM) provide better precision but higher overhead: more scale values to store, load, and apply.
 - The Nc=128 promotion interval on Hopper is a performance-accuracy tradeoff. Reducing Nc improves accuracy but adds more promotion overhead. Increasing Nc risks precision degradation.
-- On Blackwell, native block scaling only works with UE8M0. Using E4M3 or FP32 scales still requires software handling.
+- On Blackwell, native block scaling accepts UE8M0 for `.kind::mxf8f6f4` and `.kind::mxf4`, and either UE8M0 or UE4M3 for `.kind::mxf4nvf4`. FP32 scales still require software handling.

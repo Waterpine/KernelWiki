@@ -24,7 +24,7 @@ Occupancy below target due to high register usage per thread. Nsight Compute sho
 | Technique | Applicability | Effect |
 |---|---|---|
 | [TMEM](../hardware/tmem.md) | SM100 only | Moves accumulators to dedicated 256KB memory |
-| [Warp specialization](../techniques/warp-specialization.md) | SM100+ | Different warps handle different roles, reducing per-warp register needs |
+| [Warp specialization](../techniques/warp-specialization.md) | SM90+ | Different warps handle different roles, reducing per-warp register needs |
 | [Register-to-TMEM migration](../migration/register-to-tmem.md) | SM90→SM100 | Systematic approach to moving accumulators off registers |
 
 ## Blackwell Solution

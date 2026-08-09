@@ -1,6 +1,6 @@
 ---
 id: blog-amandeep-nvfp4
-title: "Twelve Attempts at NVFP4 Batched GEMV"
+title: "Twelve Attempts at an FP4 Kernel"
 author: Amandeep Singh
 url: https://amandeepsp.github.io/blog/nvfp4-blackwell-gemv/
 source_category: community-note
@@ -13,93 +13,104 @@ languages: [cuda-cpp, ptx]
 retrieved_at: 2026-04-16
 ---
 
-# Twelve Attempts at NVFP4 Batched GEMV (Amandeep Singh)
+# Twelve Attempts at an FP4 Kernel (Amandeep Singh)
 
 ## Overview
 
-Amandeep Singh's detailed blog documenting 12 different approaches to solving Problem 1 (NVFP4 Batched GEMV) in the GPU Mode hackathon. Final performance: ~26.7us (3.1x off speed-of-light). The blog is valuable for its honest documentation of failed approaches and the debugging methodology using Nsight Compute.
+Amandeep Singh's detailed blog documenting twelve attempts at Problem 1 (NVFP4 Batched GEMV) in the GPU Mode hackathon — "twelve attempts, of which only one really worked well". The working kernel (attempt 7) landed roughly 3x off speed-of-light; attempts 8-12 all regressed or had no effect. The blog is valuable for its honest documentation of failed approaches, for the debugging methodology using Nsight Compute, and for its post-hackathon breakdown of what the top three solutions did differently.
 
 ## Final Performance
 
-~26.7us geometric mean across benchmark configurations. Approximately 3.1x off the theoretical speed-of-light (~8.6us), which is limited by B200's 8 TB/s memory bandwidth.
+Attempt 7 (raw CUDA C++) measured against the organizers' speed-of-light figures:
+
+| M | K | L | Kernel (us) | Speed of light (us) | Ratio |
+|---|---|---|---|---|---|
+| 7168 | 16384 | 1 | 26.7 | 8.6 | 3.1x |
+| 4096 | 7168 | 8 | 45.1 | 17.3 | 2.6x |
+| 7168 | 2048 | 4 | 16.4 | 4.3 | 3.8x |
+
+Roughly 3x off speed of light, and none of the five later attempts improved on it.
 
 ## The 12 Attempts
 
-### Attempts 1-3: Getting the Basics Right
+### Attempts 1-4: CuTe Python DSL
 
-```
-Attempt 1: Naive CUDA kernel
-- One thread per output element
-- Result: very slow (>1000us)
-- Problem: no coalescing, no vectorization
+- One thread per output row element, walking the whole K dimension:
+  decode FP4 -> FP16, multiply by the scale factors, accumulate
+- Correct, but no parallelism along K, so not competitive
+- Later attempts varied K-dimension tiling and thread configuration
+  within the same basic structure
 
-Attempt 2: Coalesced memory access
-- Threads in warp read contiguous bytes
-- Result: ~500us
-- Problem: still using generic FP4 decode
+### Attempt 5: Split-K with atomics in CuTe
 
-Attempt 3: Vectorized loads (uint4)
-- 128-bit loads for better bandwidth utilization
-- Result: ~200us
-- Problem: FP4 decode still manual bitwise ops
-```
+- K split across threads, partial sums accumulated with atomicAdd
+- Needed a custom @dsl_user_op atomic_add_fp32 (nvvm.atomicrmw FADD),
+  since CuTe does not expose it
+- The atomics were too expensive
 
-### Attempts 4-6: FP4 Decode Optimization
+### Attempt 6: Warp-shuffle reduction in CuTe
 
-```
-Attempt 4: Hardware FP4 intrinsics
-- __cvt_fp4x2_to_halfx2 for type conversion
-- Result: ~80us
-- Big improvement from hardware-accelerated decode
+- 128 threads as 4 warps, one M row per warp, 32-lane K-tile splitting
+- Better than atomics, but blocked on the compute side: the DSL exposes
+  fma_packed_f32x2 and has no fma_packed_f16x2, and whether scalar FP16
+  arith fuses into fma.rn.f16x2 is up to LLVM, not the programmer
+- Noted in hindsight as a skill gap: another competitor reached the top 10
+  (21.6us) with a pure CuTe kernel that emits the whole decode-FMA-reduce
+  pipeline as one llvm.inline_asm block using cvt.rn.f16x2.e2m1x2 and
+  fma.rn.f16x2
 
-Attempt 5: PTX byte unpacking
-- mov.b32 {a,b,c,d} instead of shift/mask
-- Result: ~50us
-- Eliminates bitwise extraction overhead
+### Attempt 7: Rewrite in raw CUDA C++ — the one that worked
 
-Attempt 6: Combined PTX for load + decode
-- Inline PTX for entire load-decode pipeline
-- Result: ~40us
-```
+- 32 threads (one warp) per output row, each thread taking a strided K
+  slice; 128 threads per block, 4 rows per block
+- FP4 decode with __nv_cvt_fp4x2_to_halfraw2(byte, __NV_E2M1)
+- The whole decode-scale-multiply pipeline in packed half2 ops
+  (__hmul2 / __hfma2) over 4-byte (8 FP4 element) chunks, which is where
+  the real speedup came from
+- #pragma unroll 4 over scale-factor groups, __ldg for the scale loads
+- Warp reduction with __shfl_down_sync, lane 0 stores the FP16 result
+- Result: 26.7 / 45.1 / 16.4 us -> the baseline for everything after
 
-### Attempts 7-9: Memory System Optimization
+### Attempts 8-12: five experiments that did not work
 
-```
-Attempt 7: Cache policy differentiation
-- L1::no_allocate for matrix A (streamed)
-- L1::evict_last for vector B (reused)
-- Result: ~35us
-- B vector stays hot in L1 across rows
+- Attempt 8: split-K with atomics again, this time in C++
+  - Atomic contention and extra memory traffic outweighed the parallelism
 
-Attempt 8: Wider loads (v4.u64 = 256-bit)
-- Maximum vector width for global loads
-- Result: ~30us
-- Better memory transaction efficiency
+- Attempt 9: one uint2 (64-bit) load instead of two uchar4 loads
+  - 16-25% slower: extracting bytes from a uint2 costs bitwise ops, and the
+    compiler already merges two consecutive uchar4 loads
 
-Attempt 9: Register budgeting (-maxrregcount)
-- Tested 32, 40, 48, 56 max registers
-- Result: ~28us with -maxrregcount=40
-- More warps per SM -> better latency hiding
-```
+- Attempt 10: four independent accumulator chains for ILP
+  - Worst regression at +32-55%: the kernel is memory-bound, and the chains
+    raised register pressure enough to spill while hurting coalescing
 
-### Attempts 10-12: Fine-Tuning
+- Attempt 11: register-count and block-size tuning
+  - -maxrregcount 80 -> 64 had zero effect (the kernel already uses fewer
+    than 64), BLOCK_SIZE=256 with ROWS_PER_BLOCK=8 changed nothing, and
+    #pragma unroll 8 instead of 4 dropped performance by 5-87%
 
-```
-Attempt 10: Block size tuning
-- Tested BLOCK_M = 1, 2, 4, 8
-- Result: ~27.5us with BLOCK_M=4
-- B vector amortized across more rows
+- Attempt 12: software pipelining with an explicit prefetch prologue
+  - Redundant: hardware prefetch plus __ldg was already doing it
 
-Attempt 11: K-dimension unrolling
-- #pragma unroll for inner K loop
-- Result: ~27us
-- Marginal improvement from reduced loop overhead
+### What the top solutions did differently (post-hackathon analysis)
 
-Attempt 12: Per-K specialization
-- Separate kernels for different K values
-- Result: ~26.7us (final)
-- Each K variant fully unrolled
-```
+- All three top solutions (clustered around 18.5us geometric mean, about
+  2x speed of light) wrote load and decode in raw PTX rather than C
+  intrinsics: cvt.rn.f16x2.e2m1x2 instead of __nv_cvt_fp4x2_to_halfraw2,
+  ld.global with explicit qualifiers instead of __ldg
+- Cache policy control was the biggest gap: L1::no_allocate for the
+  streamed matrix A, L1::evict_last for the reused vector B
+- Much wider loads: ld.global.v2.u64 (128-bit) and ld.global.v4.u64
+  (256-bit), fetching 32 or 64 FP4 values per transaction, decoded with
+  PTX byte unpacking (mov.b32 {tmp0, tmp1, tmp2, tmp3}, %reg)
+- Templating on the exact K dimension with launch-time dispatch; the rank 1
+  solution also tuned cache hints per K (K=3584, K=8192, K=1024)
+- Tighter register budgets: rank 1 used -maxrregcount=32, rank 3 used 45,
+  against 80 here
+- The rank 2 solution processed BLOCK_M rows per block so that threads
+  reading B are shared across rows
+- A pure PyTorch solution using torch._scaled_mm with multi-stream
+  parallelism over L scored 22.4us, within 20% of the top three
 
 ## Key Debugging Methodology
 
@@ -116,7 +127,8 @@ The blog emphasizes using Nsight Compute to confirm the kernel is memory-bound:
 // 5. L2 hit rate: confirms data reuse patterns
 
 // Key insight from Amandeep:
-// "Run Nsight Compute to confirm memory-bound behavior"
+// "The single most important thing I could have done after attempt 7 was
+//  run Nsight Compute and confirm the kernel was memory-bound."
 // Many optimizations are counterproductive if you misidentify
 // the bottleneck (e.g., compute optimizations on memory-bound kernel)
 ```
@@ -143,11 +155,15 @@ The blog emphasizes using Nsight Compute to confirm the kernel is memory-bound:
 
 ## Failed Approaches (Instructive)
 
-1. **Shared memory for A matrix**: No benefit because A is streamed (each element read once). Shared memory only helps when data is reused.
+1. **Split-K with atomics** (attempts 5 and 8, in CuTe and then in C++): atomic contention plus the extra memory traffic outweighed the parallelism. The kernel is memory-bound, so more blocks only add scheduling overhead and atomic serialization on the same addresses.
 
-2. **Tensor cores for GEMV**: tcgen05.mma requires MxNxK tiles with M >= 128. GEMV has M=1 (or small M for batched), so tensor cores cannot be efficiently utilized. This is fundamentally a CUDA-core memory-bandwidth problem.
+2. **A wider single load** (attempt 9): replacing two `uchar4` loads with one `uint2` was 16-25% slower, because extracting the bytes again costs bitwise operations while the compiler was already merging the two `uchar4` loads.
 
-3. **Warp shuffle reduction**: Expected to help for the K-dimension reduction, but the overhead of shuffle instructions exceeded the benefit over simple register accumulation at these K sizes.
+3. **Four accumulator chains for ILP** (attempt 10): the worst regression at +32-55%. FMA latency hiding is irrelevant when every cycle waits on memory, and the extra chains raised register pressure enough to spill while the strided K pattern hurt coalescing.
+
+4. **Register and block-size tuning** (attempt 11): `-maxrregcount` 80 -> 64 had zero effect because the kernel already used fewer than 64 registers, and `#pragma unroll 8` instead of 4 cost 5-87%.
+
+5. **Manual software pipelining** (attempt 12): hardware prefetch combined with `__ldg` was already covering it, so the explicit prologue just doubled register pressure.
 
 ## Key Lessons
 
@@ -155,7 +171,7 @@ The blog emphasizes using Nsight Compute to confirm the kernel is memory-bound:
 
 2. **FP4 decode is the hidden bottleneck**: The sub-byte format introduces decode overhead that doesn't exist for standard FP16/FP32 kernels. Hardware intrinsics and PTX byte unpacking are essential.
 
-3. **Tensor cores don't help for GEMV**: GEMV is fundamentally memory-bandwidth-limited and the arithmetic intensity is too low for tensor cores. CUDA cores + wide vectorized loads are the right approach.
+3. **Intuition about the wrong bottleneck fails predictably**: split-K does not help memory-bound kernels; wider loads only help when the data can be used directly without unpacking; ILP is irrelevant when the bottleneck is memory; register tuning does nothing if you are already under the limit; and software pipelining is redundant when hardware prefetch is sufficient.
 
 4. **3x off SOL is realistic for FP4 GEMV**: The FP4 decode overhead, scale factor application, and reduction operations add unavoidable computation that a pure bandwidth model doesn't account for.
 
@@ -163,5 +179,5 @@ The blog emphasizes using Nsight Compute to confirm the kernel is memory-bound:
 
 ## Sources
 
-- [Twelve Attempts at NVFP4 Batched GEMV](https://amandeepsp.github.io/blog/nvfp4-blackwell-gemv/)
+- [Twelve Attempts at an FP4 Kernel](https://amandeepsp.github.io/blog/nvfp4-blackwell-gemv/)
 - [gpu-mode/reference-kernels](https://github.com/gpu-mode/reference-kernels)

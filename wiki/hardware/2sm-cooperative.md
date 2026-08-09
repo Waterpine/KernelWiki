@@ -6,7 +6,7 @@ architectures: [sm100, sm100a]
 tags: [2sm-cooperative, tcgen05, cluster]
 confidence: source-reported
 related: [hw-tcgen05-mma, hw-tmem, technique-warp-specialization]
-sources: [doc-nvidia-tuning-guide, blog-colfax-cutlass, blog-modular-blackwell]
+sources: [doc-nvidia-tuning-guide, doc-ptx-isa-sm100, blog-colfax-cutlass, blog-modular-blackwell]
 aliases: ["2-SM cooperative", "dual CTA", "2CTA", "cta_group::2"]
 ---
 
@@ -17,21 +17,25 @@ Blackwell enables two SMs within a TPC to cooperatively execute a single larger 
 ## How It Works
 
 ```
-TPC (Two Processing Clusters)
+TPC (Thread Processing Cluster — 2 SMs)
 ├── SM 0: CTA 0 — issues tcgen05.mma with cta_group::2
 │   ├── Shared Memory A (rows 0-127)
-│   └── TMEM (columns 0-255)
+│   └── TMEM: its own 128 lanes hold D rows 0-127 (N columns 0-255)
 └── SM 1: CTA 1 — cooperates on same MMA
     ├── Shared Memory A (rows 128-255)
-    └── TMEM (columns 256-511)
+    └── TMEM: its own 128 lanes hold D rows 128-255 (N columns 0-255)
 ```
 
 ## PTX
 
 ```ptx
-// 2-SM cooperative MMA
+// 2-SM cooperative MMA.
+// {m0..m7} is the optional disable-output-lane vector -- 8 elements for
+// cta_group::2 (4 for cta_group::1). It may be omitted, which leaves every
+// output lane enabled. enable_input_d is a predicate.
 tcgen05.mma.cta_group::2.kind::f16
-    [tmem_addr], descA, descB, idescC, idescD, ...;
+    [tmem_addr], descA, descB, idesc,
+    {m0, m1, m2, m3, m4, m5, m6, m7}, enable_input_d;
 ```
 
 ## Requirements

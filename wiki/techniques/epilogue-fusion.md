@@ -29,7 +29,7 @@ artifact_dir: artifacts/kernels/epilogue-fusion
 
 ## Overview
 
-Epilogue fusion overlaps the post-MMA operations (scaling, bias addition, activation functions, quantization, store to global memory) with ongoing MMA computation. On Blackwell, the accumulator lives in TMEM rather than registers, enabling dedicated epilogue warps (typically warps 2-15) to read TMEM concurrently while the MMA warp (warp 1) continues accumulating the next tile. This overlap is achieved by double-buffering the TMEM accumulator: the MMA warp writes to one half while the epilogue warps read from the other half.
+Epilogue fusion overlaps the post-MMA operations (scaling, bias addition, activation functions, quantization, store to global memory) with ongoing MMA computation. On Blackwell, the accumulator lives in TMEM rather than registers, enabling dedicated epilogue warps (4 of the 8 warps in CUTLASS 4.5.0's SM100 GEMM, warps 4-7) to read TMEM concurrently while the MMA warp (warp 0) continues accumulating the next tile. This overlap is achieved by double-buffering the TMEM accumulator: the MMA warp writes to one half while the epilogue warps read from the other half.
 
 ## TMEM-to-Register Epilogue Path
 
@@ -37,7 +37,7 @@ On Blackwell, the MMA result resides in Tensor Memory (TMEM). Epilogue warps mus
 
 ```cuda
 // Epilogue warp: read TMEM accumulator, apply fused operations, store
-// This runs on warps 2-15 while warp 1 continues MMA on next tile
+// This runs on the epilogue warps while the MMA warp continues MMA on the next tile
 __device__ void epilogue_warp_fn(
     int warp_id,
     int tile_m, int tile_n,
@@ -47,9 +47,9 @@ __device__ void epilogue_warp_fn(
     int lane_id = threadIdx.x % 32;
 
     // Each epilogue warp handles a stripe of the output tile
-    // 14 warps, TILE_M = 128 -> ~9 rows per warp
-    int rows_per_warp = (TILE_M + 13) / 14;
-    int row_start = (warp_id - 2) * rows_per_warp;
+    // 4 warps, TILE_M = 128 -> 32 rows per warp
+    int rows_per_warp = (TILE_M + 3) / 4;
+    int row_start = (warp_id - 4) * rows_per_warp;
     int row_end   = min(row_start + rows_per_warp, TILE_M);
 
     for (int r = row_start; r < row_end; r++) {
@@ -98,19 +98,27 @@ __device__ void mma_epilogue_overlap(
     int num_tiles)
 {
     int warp_id = threadIdx.x / 32;
+    int lane_id = threadIdx.x % 32;
+
+    // CUTLASS 4.5.0 SM100 WarpCategory split: warp 0 = MMA, warp 1 = Sched,
+    // warp 2 = MainloopLoad, warp 3 = EpilogueLoad, warps 4-7 = Epilogue.
+    constexpr int MMA_WARP            = 0;
+    constexpr int FIRST_EPILOGUE_WARP = 4;
+    constexpr int NUM_EPILOGUE_WARPS  = 4;   // warps 4-7
 
     __shared__ uint64_t mbar_mma_done[2];    // One per TMEM buffer half
     __shared__ uint64_t mbar_epi_done[2];    // Epilogue completion signals
 
     if (threadIdx.x == 0) {
         for (int i = 0; i < 2; i++) {
+            // One arrival from the MMA warp; one from EACH epilogue warp.
             mbarrier_init(&mbar_mma_done[i], 1);
-            mbarrier_init(&mbar_epi_done[i], 1);
+            mbarrier_init(&mbar_epi_done[i], NUM_EPILOGUE_WARPS);
         }
     }
     __syncthreads();
 
-    if (warp_id == 1) {
+    if (warp_id == MMA_WARP) {
         // === MMA WARP ===
         for (int t = 0; t < num_tiles; t++) {
             int buf = t % 2;  // Alternate between buffer halves
@@ -129,8 +137,8 @@ __device__ void mma_epilogue_overlap(
             mbarrier_arrive(&mbar_mma_done[buf]);
         }
 
-    } else if (warp_id >= 2) {
-        // === EPILOGUE WARPS ===
+    } else if (warp_id >= FIRST_EPILOGUE_WARP) {
+        // === EPILOGUE WARPS (4-7) ===
         for (int t = 0; t < num_tiles; t++) {
             int buf = t % 2;
 
@@ -142,8 +150,8 @@ __device__ void mma_epilogue_overlap(
             epilogue_store(params, t, tmem_col_offset, warp_id);
 
             // ALL epilogue warps must finish reading TMEM before MMA reuses
-            // the buffer. Each epilogue warp arrives on mbar_epi_done;
-            // mbar_epi_done is initialized with count = NUM_EPILOGUE_WARPS.
+            // the buffer. Each epilogue warp arrives once on mbar_epi_done,
+            // which was initialized above with count = NUM_EPILOGUE_WARPS.
             // MMA warp waits on this mbarrier before writing to this half.
             if (lane_id == 0) {
                 mbarrier_arrive(&mbar_epi_done[buf]);
@@ -163,20 +171,24 @@ CUTLASS 4.5.0 provides composable epilogue visitors that fuse arbitrary element-
 // Uses the EVT (Epilogue Visitor Tree) pattern
 
 using EpilogueOp = cutlass::epilogue::fusion::LinCombEltAct<
-    cutlass::epilogue::thread::ReLU,   // Activation function
-    float,                              // Compute type
-    float,                              // Scale type
-    cutlass::half_t                     // Output type
+    cutlass::epilogue::thread::ReLu,   // ActivationFn_ (template template param)
+    cutlass::half_t,                    // ElementOutput_
+    float,                              // ElementCompute_
+    cutlass::half_t                     // ElementSource_
 >;
 
-// The epilogue descriptor tells CUTLASS how to partition work
-// across the 14 epilogue warps
-using CollectiveEpilogue = cutlass::epilogue::collective::Sm100EpilogueTmaWarpSpecialized<
-    cutlass::gemm::TagToStrideC_t<cutlass::layout::RowMajor>,
-    cutlass::gemm::TagToStrideC_t<cutlass::layout::RowMajor>,
-    EpilogueOp,
-    cutlass::gemm::EpilogueDefault  // Default tiling
->;
+// The epilogue collective is produced by CollectiveBuilder, which selects
+// the CollectiveEpilogue<Sm100TmaWarpSpecialized<...>, ...> specialization
+// (4 epilogue warps: ThreadCount = 128).
+using CollectiveEpilogue = typename cutlass::epilogue::collective::CollectiveBuilder<
+    ArchTag, OperatorClass,
+    MmaTileShape_MNK, ClusterShape_MNK,
+    cutlass::epilogue::collective::EpilogueTileAuto,
+    ElementAccumulator, ElementAccumulator,
+    ElementC, LayoutC, AlignmentC,
+    ElementD, LayoutD, AlignmentD,
+    cutlass::epilogue::collective::EpilogueScheduleAuto
+  >::CollectiveOp;
 
 // In the kernel, the epilogue is invoked after the mainloop:
 // epilogue(
@@ -200,15 +212,15 @@ using CollectiveEpilogue = cutlass::epilogue::collective::Sm100EpilogueTmaWarpSp
 
 ## When to Use
 
-- **All Blackwell GEMMs with non-trivial epilogues**: The 14 epilogue warps are available by default in the warp-specialized model. Fusing operations avoids a separate kernel launch and an extra global memory round-trip.
+- **All Blackwell GEMMs with non-trivial epilogues**: The epilogue warps are available by default in the warp-specialized model. Fusing operations avoids a separate kernel launch and an extra global memory round-trip.
 - **Attention kernels**: The softmax rescaling and output accumulation can be overlapped with the next KV tile's MMA.
 - **Quantized inference**: FP32-to-FP8 conversion in the epilogue avoids writing FP32 intermediates to global memory.
 
 ## Caveats
 
 - The epilogue can only read TMEM after the MMA for that tile is complete. The double-buffer synchronization is mandatory to prevent reading partial results.
-- TMEM-to-register bandwidth is not unlimited. With 14 warps simultaneously reading TMEM, each warp gets a proportional share. Very wide output tiles (large TILE_N) may bottleneck on TMEM read bandwidth.
-- Simple epilogues (just store) waste the 14 epilogue warps. For such cases, consider reducing the CTA size or assigning epilogue warps to other work (e.g., next-tile TMA prefetch).
+- TMEM-to-register bandwidth is not unlimited. With several warps simultaneously reading TMEM, each warp gets a proportional share. Very wide output tiles (large TILE_N) may bottleneck on TMEM read bandwidth.
+- Simple epilogues (just store) leave the epilogue warps idle. For such cases, consider reducing the CTA size or assigning epilogue warps to other work (e.g., next-tile TMA prefetch).
 
 ## Full Reference Implementation
 

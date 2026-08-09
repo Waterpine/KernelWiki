@@ -54,9 +54,9 @@ Hardware-level dynamic tile scheduling:
 
 - Replaces static grid-based tile assignment
 - Dynamically distributes tiles to available SMs
-- Eliminates tail effects (last-wave underutilization)
+- Reduces last-wave underutilization by relocating unlaunched clusters to CTAs that finish early (a tile is never subdivided, so a short last wave remains short)
 - Enables persistent kernels without manual tile queue management
-- `clusterlaunchcontrol.try_cancel` API for graceful termination
+- `clusterlaunchcontrol.try_cancel` API: cancels the launch of a not-yet-started cluster and returns its first ctaid as the next unit of work; a failed request is what ends the persistent loop
 - Critical for grouped GEMM / MoE where group sizes vary
 
 ### TMA (Tensor Memory Accelerator)
@@ -64,7 +64,7 @@ Hardware-level dynamic tile scheduling:
 Async bulk data movement engine (carried from Hopper, enhanced):
 
 - Moves data from global -> shared memory without SM intervention
-- 128-byte alignment requirement for descriptors
+- The `CUtensorMap` descriptor object must be 64-byte aligned; the described global base address must be 16-byte aligned
 - Supports multicasting to multiple SMs in a cluster
 - Pipelined with mbarrier for async producer-consumer
 
@@ -89,7 +89,7 @@ Native tensor core support for narrow data types:
 
 ### PDL (Programmatic Dependent Launch) / GDC (Grid Dependency Control)
 
-- PDL enabled by default on Blackwell
+- PDL is opt-in per launch (secondary kernel launched with `cudaLaunchAttributeProgrammaticStreamSerialization`), available from compute capability 9.0
 - Overlaps dependent kernel launches
 - GDC controls inter-kernel dependencies at grid level
 - Reduces kernel launch gaps from ~5us to near-zero for dependent chains
@@ -99,7 +99,7 @@ Native tensor core support for narrow data types:
 | Feature | Value |
 |---|---|
 | Architecture | SM100a (B200) |
-| SMs | 142 |
+| SMs | 148 (across 8 GPCs, two dies) |
 | Max warps/SM | 64 |
 | 32-bit registers | 64K per SM |
 | SMEM per SM | 228 KB |
@@ -118,7 +118,7 @@ Demonstrated progression from the tcgen05 tutorial (Gau Nernst):
 ```
 Naive (17% cuBLAS) -> 128B Swizzling (46%) -> Pipelining (62%)
 -> Warp Specialization (80%) -> 2-SM MMA (86%)
--> Persistent Kernel + CLC (98% cuBLAS)
+-> Persistent Kernel, static scheduling (98% cuBLAS)
 ```
 
 Each step addresses a specific bottleneck:
@@ -126,7 +126,8 @@ Each step addresses a specific bottleneck:
 2. **Pipelining**: Overlaps TMA loads with compute
 3. **Warp specialization**: Dedicated warps for TMA vs compute
 4. **2-SM cooperative**: Larger effective tile for better reuse
-5. **Persistent + CLC**: Eliminates tail effects and kernel launch overhead
+5. **Persistent kernel**: Amortizes launch and per-CTA setup overhead and
+   overlaps the epilogue (the cited tutorial did not use CLC)
 
 ## Hopper-to-Blackwell Migration Summary
 

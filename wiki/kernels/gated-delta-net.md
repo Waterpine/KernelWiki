@@ -215,12 +215,20 @@ TFLA adds a second level of tiling within chunks, enabling arbitrarily large chu
 // TFLA: Inline PTX for Blackwell tcgen05 matmul within chunk tiles
 // Two levels of parallelism: standard chunkwise + tiling within chunks
 
-// SM100 path: tcgen05.mma for intra-chunk matrix operations
+// SM100 path: tcgen05.mma for intra-chunk matrix operations.
+// disable-output-lane is an optional 4-element vector for cta_group::1;
+// enable-input-d is a predicate.
+uint32_t mask[4] = {0, 0, 0, 0};
 asm volatile(
-    "tcgen05.mma.cta_group::1.kind::f16f16f32"
-    " [%0], %1, %2;"
+    "{\n\t"
+    ".reg .pred p;\n\t"
+    "setp.ne.b32 p, %4, 0;\n\t"
+    "tcgen05.mma.cta_group::1.kind::f16"
+    " [%0], %1, %2, %3, {%5, %6, %7, %8}, p;\n\t"
+    "}\n"
     :
-    : "l"(tmem_addr), "l"(a_smem_addr), "l"(b_smem_addr)
+    : "r"(tmem_addr), "l"(a_desc), "l"(b_desc), "r"(idesc), "r"(1),
+      "r"(mask[0]), "r"(mask[1]), "r"(mask[2]), "r"(mask[3])
 );
 ```
 

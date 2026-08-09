@@ -32,28 +32,21 @@ languages:
 url: https://github.com/gpu-mode/reference-kernels
 submissions:
 - rank: 1
-  participant: Simon (veitner)
-  score: ~22.4us geomean
-  technique: Full PTX assembly with cache policy differentiation, byte unpacking,
-    and aggressive register budgeting (maxrregcount=32)
+  participant: not publicly attributed
+  technique: 'Reported by Amandeep for the rank-1 solution: full PTX load/decode,
+    per-K cache-hint tuning and -maxrregcount=32. The code_path directory name
+    "rank-1-simon-veitner" is a historical reconstruction label, not rank evidence.'
   submission_truth: reconstructed-from-blog
   code_path: artifacts/contests/gpu-mode-nvfp4/problem-1-gemv/submissions/rank-1-simon-veitner/03-strategy-3-atomic-free-shared-memory-reduction.cpp
 - rank: 2
-  participant: yue
-  score: ~23.0us geomean
-  technique: Shared B vector reads across BLOCK_M rows, PTX load/decode path, ILP
-    optimization
+  participant: not publicly attributed
+  technique: 'Reported by Amandeep for the rank-2 solution: BLOCK_M rows per thread
+    block with B reads shared across rows. The code_path directory name "rank-2-yue"
+    is a historical reconstruction label, not rank evidence; the kernel it stores is
+    from Yue Zhang''s published progression, which reports 22.392us without claiming
+    a rank.'
   submission_truth: reconstructed-from-blog
   code_path: artifacts/contests/gpu-mode-nvfp4/problem-1-gemv/submissions/rank-2-yue/05-step-5-ilp-optimization-22-9us.cpp
-- rank: 3
-  participant: Amandeep
-  score: ~24.0us geomean
-  technique: PTX assembly with per-K specialization, vectorized 256-bit loads, cache
-    bypass for streamed matrix A
-  submission_truth: unavailable
-  code_unavailable_reason: Amandeep's PTX-level per-K specialization kernel was shared
-    in the GPU Mode Discord problem-1 thread; author has not republished to a public
-    platform at collection time
 artifact_dir: artifacts/contests/gpu-mode-nvfp4/problem-1-gemv
 ---
 
@@ -99,12 +92,13 @@ Prizes: 1st place DGX Spark + GTC pass, 2nd RTX 5090 + GTC, 3rd RTX 5080.
 
 ## Top Performer Results
 
-Geometric mean across all three benchmark configurations:
-- Rank 1: ~22.4us (using full PTX assembly with per-K specialization)
-- Rank 2: ~23.0us (shared B vector reads across BLOCK_M rows)
-- Rank 3: ~24.0us
+Three separate claims, each from a different source, deliberately not merged:
 
-Speed-of-light gap: top performers achieved roughly 2.6x of SOL (~8.6us), reflecting the overhead of FP4 decoding and scale application.
+1. **Top-three cluster.** Amandeep reports that the top three PTX solutions clustered around ~18.5us geometric mean, roughly 2x the speed-of-light figures in the task specification, and attributes specific techniques to them: rank 1 used full PTX with per-K cache-hint tuning and `-maxrregcount=32`, the rank-2 solution shared B vector reads across BLOCK_M rows, and rank 3 used `-maxrregcount=45`. He names no participants.
+2. **A self-reported score.** Yue Zhang reports a final leaderboard submission of 22.392us geometric mean, without claiming a placement.
+3. **A non-kernel result.** A pure PyTorch solution built on `torch._scaled_mm` scored 22.4us, which Amandeep describes as within 20% of the top three.
+
+No public source maps a named participant to a rank, so this page does not do so either. The `submissions` entries above keep their historical directory names purely as artifact paths.
 
 ## Optimization Techniques from Top Performers
 
@@ -198,7 +192,7 @@ Since B is shape (1 x K x L), every row of A multiplies against the same B vecto
 | Stage | Technique | Latency |
 |-------|-----------|---------|
 | CuTe DSL baseline | Basic CuTe partition/copy | ~100us |
-| Coalesced access | Fix memory access patterns | ~443us -> 39us |
+| Coalesced access + thread collaboration | Fix memory access patterns | 2000us -> 443us |
 | Hardware intrinsics | Use cvt.rn.f16x2.e2m1x2 | ~39us |
 | PTX assembly | Full PTX with byte unpacking | ~27us |
 | ILP optimization | Instruction-level parallelism | ~22.9us |
@@ -208,12 +202,12 @@ Since B is shape (1 x K x L), every row of A multiplies against the same B vecto
 
 1. **Memory-bound kernels need bandwidth-first thinking**: Arithmetic optimizations have minimal impact; focus on memory access patterns, cache policies, and vectorized loads.
 2. **PTX gives real control on Blackwell**: The gap between C intrinsics and hand-written PTX was substantial (443us -> 27us in one participant's journey).
-3. **Nsight Compute confirms memory-bound behavior**: "Run Nsight Compute to confirm memory-bound behavior" (Amandeep's key lesson after 12 attempts).
+3. **Nsight Compute confirms memory-bound behavior**: "The single most important thing I could have done after attempt 7 was run Nsight Compute and confirm the kernel was memory-bound." (Amandeep, after twelve attempts).
 4. **Register budgeting matters**: On memory-bound kernels, lower register count -> higher occupancy -> better memory latency hiding. The difference between 32 and 45 max registers was measurable.
 
 ## B200 Context
 
-- Architecture: sm_100a, 142 SMs
+- Architecture: sm_100a, 148 SMs
 - Memory bandwidth: 8 TB/s HBM3e
 - Native FP4 (E2M1) tensor core instructions
 - TMA for async bulk loads

@@ -7,7 +7,7 @@ files:
 - local_path: code/01-tmem-allocation-tcgen05-mma-single-thread-launch.cu
   heading_path: '## Key Code > ### TMEM allocation + tcgen05.mma (single-thread launch)'
   fence_lang: cuda
-  sha256: 9f74475e8707161302e0dd1608433398ef9a8184c42297752216f6e4994fbb4f
+  sha256: 90cff9d28040e1ad1ad302bb0492b75d170bc806e3474dbaefffcb5de3dc3f6e
 - local_path: code/02-tmem-load-into-registers-for-epilogue.cu
   heading_path: '## Key Code > ### TMEM load into registers for epilogue'
   fence_lang: cuda

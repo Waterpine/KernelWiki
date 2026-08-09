@@ -72,9 +72,17 @@ __device__ void load_and_unpack_nvfp4_256bit(
         uint32_t lo = (uint32_t)(raw[i]);
         uint32_t hi = (uint32_t)(raw[i] >> 32);
 
-        // PTX byte unpack: extract individual bytes from 32-bit word
+        // PTX byte unpack: extract individual bytes from 32-bit word.
+        // mov.b32's vector form unpacks into four .b8 registers, so the
+        // temporaries are declared inside the asm block and widened with cvt.
         uint32_t b0, b1, b2, b3;
-        asm volatile("mov.b32 {%0,%1,%2,%3}, %4;"
+        asm volatile("{\n\t"
+            ".reg .b8 t0, t1, t2, t3;\n\t"
+            "mov.b32 {t0, t1, t2, t3}, %4;\n\t"
+            "cvt.u32.u8 %0, t0;\n\t"
+            "cvt.u32.u8 %1, t1;\n\t"
+            "cvt.u32.u8 %2, t2;\n\t"
+            "cvt.u32.u8 %3, t3;\n\t}"
             : "=r"(b0), "=r"(b1), "=r"(b2), "=r"(b3) : "r"(lo));
 
         // Each byte contains 2 FP4 values — decode low word (8 values)
@@ -86,7 +94,13 @@ __device__ void load_and_unpack_nvfp4_256bit(
 
         // Unpack high word (next 8 values from same 64-bit element)
         uint32_t hb0, hb1, hb2, hb3;
-        asm volatile("mov.b32 {%0,%1,%2,%3}, %4;"
+        asm volatile("{\n\t"
+            ".reg .b8 t0, t1, t2, t3;\n\t"
+            "mov.b32 {t0, t1, t2, t3}, %4;\n\t"
+            "cvt.u32.u8 %0, t0;\n\t"
+            "cvt.u32.u8 %1, t1;\n\t"
+            "cvt.u32.u8 %2, t2;\n\t"
+            "cvt.u32.u8 %3, t3;\n\t}"
             : "=r"(hb0), "=r"(hb1), "=r"(hb2), "=r"(hb3) : "r"(hi));
         for (int b = 0; b < 4; b++) {
             uint32_t byte_val = (b == 0) ? hb0 : (b == 1) ? hb1 : (b == 2) ? hb2 : hb3;
@@ -124,11 +138,11 @@ asm volatile(
 );
 ```
 
-The impact of cache policies from the GPU Mode Hackathon:
+The 39 us and 27 us figures below come from the participant journey that introduced a PTX load/decode path; that step replaced intrinsic decoding with PTX decode and a fused `f16x2` multiply-accumulate, so the 1.44x is not a measurement of cache-policy differentiation on its own:
 
 ```
-No cache policy differentiation:  39 us
-A: L1::no_allocate, B: L1::evict_last: 27 us  (1.44x faster)
+Intrinsic decode with __ldg loads:    39 us
+PTX vectorized decode + fused f16x2:  27 us  (1.44x faster)
 ```
 
 The full set of PTX load cache qualifiers:
@@ -225,13 +239,16 @@ nvfp4_gemv_optimized(
     int local_row = threadIdx.x / THREADS_PER_ROW;      // 0..3
     int thread_in_row = threadIdx.x % THREADS_PER_ROW;  // 0..63
     int row = blockIdx.x * BLOCK_M + local_row;
-    if (row >= M) return;
+    // No early return: every thread must reach the __syncthreads() below.
+    // `active` depends only on blockIdx.x and local_row, so it is uniform
+    // across each row's two warps.
+    bool active = row < M;
 
     float acc = 0.0f;
 
     // Each of the 64 threads handles a distinct K-chunk (no duplication)
     // 64 elements per load × 64 threads = 4096 K elements per iteration
-    for (int k = thread_in_row * 64; k < K; k += THREADS_PER_ROW * 64) {
+    if (active) for (int k = thread_in_row * 64; k < K; k += THREADS_PER_ROW * 64) {
         // Load B (reused across rows): L1::evict_last, 256-bit
         uint64_t b_raw[4];
         asm volatile(
@@ -264,13 +281,13 @@ nvfp4_gemv_optimized(
     __shared__ float smem_reduce[BLOCK_M * 2];  // 2 warp partials per row
     int warp_in_row = thread_in_row / 32;  // 0 or 1
     int lane = thread_in_row % 32;
-    if (lane == 0) {
+    if (active && lane == 0) {
         smem_reduce[local_row * 2 + warp_in_row] = acc;
     }
     __syncthreads();
 
     // Final sum and store (one thread per row)
-    if (thread_in_row == 0) {
+    if (active && thread_in_row == 0) {
         float result = smem_reduce[local_row * 2] + smem_reduce[local_row * 2 + 1];
         C[row] = __float2half(result * global_scale_a * global_scale_b);
     }
@@ -284,7 +301,7 @@ nvfp4_gemv_optimized(
 | Baseline | Naive C++ | 2000 us | 1.0x |
 | Coalesced access | Memory layout fix | 443 us | 4.5x |
 | Hardware intrinsics | FP4 decode | 39 us | 51x |
-| PTX assembly | Vectorized loads + cache policy | 27 us | 74x |
+| PTX assembly | PTX vectorized decode + fused `f16x2` | 27 us | 74x |
 | ILP + register tuning | Unrolling + maxrregcount | 22.4 us | 89x |
 | Speed of light | | ~8.6 us | 233x |
 

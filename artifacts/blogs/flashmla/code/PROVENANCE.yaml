@@ -1,6 +1,6 @@
 origin_url: https://github.com/deepseek-ai/FlashMLA
 upstream_repo: blog
-upstream_sha: 71c737929f2567bd0a094ae140f8f60f390b1232
+upstream_sha: none
 license: inherits-from-source-blog
 retrieved_at: 2026-04-27
 asset_mode: extracted

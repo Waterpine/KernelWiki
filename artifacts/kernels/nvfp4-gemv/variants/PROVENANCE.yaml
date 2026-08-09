@@ -21,11 +21,11 @@ files:
 - local_path: 03-step-3-hardware-intrinsics-39us.cpp
   role: derived-source
   mode: derived
-  sha256: ad45619f3d924a0abaf13e5db0a999f3f54dcea567cd19df2dc7ebbdbd414738
+  sha256: c066da28896935ad8308811716d9d53899fd76cf2bd912989c45f7df625bcf80
 - local_path: 04-step-4-ptx-assembly-27us.ptx
   role: derived-source
   mode: derived
-  sha256: 3a4fde2e82fa03aad2795255cc8f2569172cc1147cb500ae3344d8704a718aa5
+  sha256: 2e587a5275904fbdd06ecf90c9ac56bc09384262af4ae3ff1614d2901724b502
 - local_path: 05-step-5-ilp-optimization-22-9us.cpp
   role: derived-source
   mode: derived

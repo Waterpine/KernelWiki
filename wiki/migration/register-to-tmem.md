@@ -6,7 +6,7 @@ from_arch: sm90
 to_arch: sm100
 tags: [tmem, tcgen05]
 related: [hw-tmem, hw-tcgen05-mma, pattern-register-pressure]
-sources: [doc-nvidia-tuning-guide, blog-tcgen05-tutorial, pr-vllm-22738]
+sources: [doc-nvidia-tuning-guide, doc-ptx-isa-sm100, blog-tcgen05-tutorial, pr-vllm-22738]
 blackwell_relevance: "Hopper stores MMA accumulators in registers (high pressure). Blackwell uses dedicated TMEM (256KB), eliminating register pressure for accumulators."
 confidence: source-reported
 reproducibility: pseudocode
@@ -148,7 +148,7 @@ __global__ void hopper_kernel(/* ... */) {
 __global__ void blackwell_kernel(/* ... */) {
     // 1. Allocate TMEM (explicit, must be done once)
     __shared__ uint32_t s_tmem_acc;
-    if (threadIdx.x == 0) {
+    if (threadIdx.x < 32) {  // one whole warp: tcgen05.alloc/dealloc are .sync.aligned
         uint32_t smem_addr =
             static_cast<uint32_t>(__cvta_generic_to_shared(&s_tmem_acc));
         asm volatile(
@@ -162,20 +162,28 @@ __global__ void blackwell_kernel(/* ... */) {
     // 2. Zero-initialize TMEM
     for (int c = 0; c < 256; c += 4) {
         asm volatile(
-            "tcgen05.st.sync.aligned.32x1b.x4.b32 [%0], {%1,%2,%3,%4};"
+            "tcgen05.st.sync.aligned.32x32b.x4.b32 [%0], {%1,%2,%3,%4};"
             : : "r"(tmem_acc + c),
                 "f"(0.f), "f"(0.f), "f"(0.f), "f"(0.f)
         );
     }
 
     // 3. Mainloop: tcgen05 accumulates into TMEM
+    // disable-output-lane mask (4 elements for cta_group::1); all zero
+    // means no TMEM lane is masked off.
+    uint32_t mask[4] = {0, 0, 0, 0};
     for (int k = 0; k < K_tiles; ++k) {
         // NO ldmatrix -- tcgen05 reads directly from SMEM
         if (threadIdx.x == 0) {
             asm volatile(
+                "{\n\t"
+                ".reg .pred p;\n\t"
+                "setp.ne.b32 p, %4, 0;\n\t"
                 "tcgen05.mma.cta_group::1.kind::f16 "
-                "[%0], %1, %2, %3, 1;"
-                : : "r"(tmem_acc), "l"(desc_a), "l"(desc_b), "r"(0)
+                "[%0], %1, %2, %3, {%5, %6, %7, %8}, p;\n\t"
+                "}\n"
+                : : "r"(tmem_acc), "l"(desc_a), "l"(desc_b), "r"(0), "r"(1),
+                    "r"(mask[0]), "r"(mask[1]), "r"(mask[2]), "r"(mask[3])
             );
         }
         // NO commit/wait -- fully async
@@ -190,7 +198,7 @@ __global__ void blackwell_kernel(/* ... */) {
     for (int c = 0; c < 256; c += 4) {
         float4 vals;
         asm volatile(
-            "tcgen05.ld.sync.aligned.32x1b.x4.b32 {%0,%1,%2,%3}, [%4];"
+            "tcgen05.ld.sync.aligned.32x32b.x4.b32 {%0,%1,%2,%3}, [%4];"
             : "=f"(vals.x), "=f"(vals.y), "=f"(vals.z), "=f"(vals.w)
             : "r"(tmem_acc + c)
         );
@@ -214,7 +222,7 @@ __global__ void blackwell_kernel(/* ... */) {
     }
 
     // 6. Deallocate TMEM (explicit, MUST be done in persistent kernels)
-    if (threadIdx.x == 0) {
+    if (threadIdx.x < 32) {
         asm volatile(
             "tcgen05.dealloc.cta_group::1.sync.aligned.b32 %0, %1;"
             : : "r"(tmem_acc), "r"(256)
@@ -340,7 +348,7 @@ FlashAttention is a prime example where the register-to-TMEM migration unlocks m
 
 ```
 FlashAttention on Hopper needs registers for:
-  - QK^T accumulator:   64 registers (m64xn64 attention scores)
+  - QK^T accumulator:   32 registers (m64xn64 attention scores)
   - PV accumulator:     128 registers (m64xn256 output)
   - Softmax state:      4 registers (rowmax, rowsum)
   - Q fragment:         16 registers
@@ -348,12 +356,13 @@ FlashAttention on Hopper needs registers for:
   - V fragment:         16 registers
   - Loop state:         10 registers
   ──────────────────────────────
-  Total:               ~254 registers per thread
+  Total:               ~222 registers per thread
 
-  Available: 256 registers/thread at 1 CTA/SM occupancy
-  Margin: 2 registers (!!)
+  Available: 255 registers/thread (architectural maximum)
+  Margin: 33 registers
   
-  Result: compiler must spill, or tile sizes must shrink
+  Result: the accumulators alone take 160 of the 255 registers,
+          so tile sizes cannot grow much before the compiler spills
 ```
 
 ### Blackwell FlashAttention with TMEM
@@ -368,8 +377,8 @@ FlashAttention on Blackwell:
   ──────────────────────────────
   Total:               ~20 registers per thread
 
-  Available: 256 registers/thread
-  Margin: 236 registers -- massive headroom
+  Available: 255 registers/thread (architectural maximum)
+  Margin: 235 registers -- massive headroom
 
   Result: Can use for ping-pong scheduling, software exp emulation,
           larger tiles, more pipeline stages

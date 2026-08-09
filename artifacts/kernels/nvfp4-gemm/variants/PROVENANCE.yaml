@@ -13,4 +13,4 @@ files:
 - local_path: 01-nvfp4-gemm-skeleton.cu
   role: derived-source
   mode: derived
-  sha256: 7dbe5ea23d016ca625e1cbf639de6aa523785327788d1d368a6e01fef00d4fb7
+  sha256: 165da025a314e207156f435d97fb3009506a54d3c09f87266ae772a3318bbb83

@@ -8,7 +8,7 @@ confidence: source-reported
 reproducibility: snippet
 prerequisites: [hw-tmem]
 related: [kernel-fused-moe, kernel-nvfp4-gemm, technique-epilogue-fusion]
-sources: [contest-gpumode-p3, contest-flashinfer-track-a, blog-tflops-gap-fp4-moe]
+sources: [contest-gpumode-p3, contest-flashinfer-track-a, doc-ptx-isa-sm100, blog-tflops-gap-fp4-moe]
 blackwell_relevance: "TMEM enables multi-accumulator fusion (gate+up dual GEMM) without register pressure; technique valuable on both architectures."
 ---
 
@@ -36,6 +36,12 @@ __global__ void fused_gate_up_silu(...) {
     float g = tmem_load(tmem_gate);
     float u = tmem_load(tmem_up);
     output = (g / (1.0f + expf(-g))) * u;  // SwiGLU fused
+
+    // Both allocations must be released before the kernel exits; like the
+    // allocation, tcgen05.dealloc is .sync.aligned and is issued by one whole
+    // warp. Deallocate in reverse order of allocation.
+    tmem_dealloc(tmem_up, 256);
+    tmem_dealloc(tmem_gate, 256);
 }
 ```
 
@@ -46,7 +52,7 @@ __global__ void fused_gate_up_silu(...) {
 
 ## Constraints
 
-- TMEM capacity limits how many accumulators can fuse (256 cols total)
+- TMEM capacity limits how many accumulators can fuse (512 columns total per CTA, so e.g. two 256-column FP32 accumulators exactly fill it)
 - Register pressure on epilogue if fusing complex activations
 - Fusion opportunities depend on dataflow shape (dependency graph must be DAG-compatible with CTA scope)
 

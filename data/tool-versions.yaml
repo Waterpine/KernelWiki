@@ -43,15 +43,20 @@ tools:
   - tool: cutlass
     releases:
       - name: "4.5.0"
-        released_at: "2026-03-27"
+        released_at: "2026-05-01"
         channel: stable
         evidence_source_ids:
           - doc-cutlass-changelog-sm100
         notes: |
-          Most recent CUTLASS stable release as of 2026-04-27. Wiki pages
-          with confidence: verified that mention CUTLASS 4.x SHOULD pin to
-          4.5.0 unless they specifically depend on a feature that arrived
-          in a later patch.
+          released_at is the CHANGELOG.md heading date (2026-05-01), which is
+          the convention used throughout this file; the GitHub release for
+          v4.5.0 was published 2026-05-13.
+          This is the CUTLASS release the knowledge base pins to, not the
+          newest upstream release: 4.5.1 (2026-05-27), 4.5.2, 4.5.3, 4.6.0 and
+          4.6.1 (2026-07-15) shipped afterwards and are not yet registered
+          here. Wiki pages with confidence: verified that mention CUTLASS 4.x
+          SHOULD pin to 4.5.0 unless they specifically depend on a feature
+          that arrived in a later patch.
       - name: "4.4.2"
         released_at: "2026-03-13"
         channel: stable
@@ -74,7 +79,7 @@ tools:
         notes: |
           Pre-Blackwell-tutorial-rewrite era reference release.
       - name: "3.8.0"
-        released_at: "2025-01-15"
+        released_at: "2025-01-25"
         channel: stable
         evidence_source_ids:
           - doc-cutlass-changelog-sm100

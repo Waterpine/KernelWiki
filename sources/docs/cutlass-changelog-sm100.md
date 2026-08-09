@@ -5,16 +5,16 @@ url: https://docs.nvidia.com/cutlass/latest/CHANGELOG.html
 source_category: official-doc
 architectures: [sm100, sm100a]
 tags: [tcgen05, tmem, tma, clc, nvfp4, fp4, fp6, fp8, block-scale, warp-specialization, persistent-kernel, gemm, grouped-gemm, attention, moe, mla, 2sm-cooperative, tile-scheduling, cute-dsl, epilogue-fusion, sparse-attention]
-retrieved_at: 2026-04-17
+retrieved_at: 2026-08-08
 ---
 
 # CUTLASS Changelog: SM100/Blackwell Entries
 
 ## Overview
 
-Comprehensive listing of all SM100 (Blackwell) related entries from the CUTLASS changelog, spanning from CUTLASS 3.8.0 (January 2025, first Blackwell support) through CUTLASS 4.5.0 (March 2026). The changelog tracks the rapid evolution of Blackwell kernel support including dense/sparse GEMM, blockscaled formats (NVFP4, MXFP4, MXFP6, MXFP8), MoE kernels, attention kernels, CuTe DSL, and the Cluster Launch Control scheduling system.
+Comprehensive listing of all SM100 (Blackwell) related entries from the CUTLASS changelog, spanning from CUTLASS 3.8.0 (January 2025, first Blackwell support) through CUTLASS 4.5.0 (May 2026). Scope note: 4.5.0 is the release this knowledge base pins to (see `data/tool-versions.yaml`), not the newest upstream release — 4.5.1 through 4.6.1 shipped between May and July 2026 and are not covered here. The changelog tracks the rapid evolution of Blackwell kernel support including dense/sparse GEMM, blockscaled formats (NVFP4, MXFP4, MXFP6, MXFP8), MoE kernels, attention kernels, CuTe DSL, and the Cluster Launch Control scheduling system.
 
-## CUTLASS 4.5.0 (2026-03-27)
+## CUTLASS 4.5.0 (2026-05-01)
 
 - Added example 95 supporting "green context SM partition" enabling partial SM allocation for Blackwell kernels
 - Fixed L2 capacity handling in Blackwell SM100/SM120 kernel templates
@@ -146,4 +146,4 @@ Comprehensive listing of all SM100 (Blackwell) related entries from the CUTLASS 
 - **Sep 2025** (4.2.0): SM103 (B300), GEMV, cpasync, SM121 (DGX Spark)
 - **Nov 2025** (4.3.0): MoE API, stream-K convolution, 84% SOL tutorial
 - **Feb 2026** (4.4.0): GB300, AoT compilation, cute.experimental, epilogue fusion
-- **Mar 2026** (4.5.0): Green context, L2 fixes, CUDA 13.2 optimization
+- **May 2026** (4.5.0): Green context, L2 fixes, CUDA 13.2 optimization

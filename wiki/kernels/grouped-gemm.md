@@ -10,14 +10,7 @@ kernel_types: [grouped-gemm, gemm, moe]
 languages: [cuda-cpp, cute-dsl]
 related: [kernel-fused-moe, kernel-deepgemm, hw-tcgen05-mma, hw-clc, technique-persistent-kernels, technique-tile-scheduling]
 sources: [contest-gpumode-p4, blog-deepgemm, doc-cutlass-blackwell]
-performance_claims:
-  - gpu: B200
-    dtype: nvfp4
-    shape: "variable M, shared N=K, 15 groups"
-    metric: latency_us
-    value: 11.2
-    utilization: "compute-bound"
-    source_id: contest-gpumode-p4
+performance_claims: []
 blackwell_relevance: "SM100 CLC enables dynamic tile scheduling critical for variable-M grouped GEMM in MoE workloads."
 ---
 
@@ -93,25 +86,30 @@ using Schedule = cutlass::gemm::KernelPtrArrayTmaWarpSpecialized1SmNvf4Sm100;
 // TMA handles variable-offset loads via per-group descriptors
 // CLC distributes tiles across groups dynamically
 
-using GemmKernel = cutlass::gemm::kernel::GemmGrouped<
-    cutlass::gemm::GemmShape<128, 256, 128>,  // Tile shape
-    cutlass::arch::Sm100,
-    cutlass::float_e2m1_t,    // NVFP4 operand type
-    cutlass::float_e2m1_t,
-    float,
-    cutlass::layout::RowMajor,
-    cutlass::layout::ColumnMajor
+// SM100 grouped GEMM uses the CUTLASS 3.x path, not the 2.x
+// kernel::GemmGrouped class: the group dimension is carried by
+// GroupProblemShape, and the collectives are composed into GemmUniversal.
+using ProblemShape = cutlass::gemm::GroupProblemShape<
+    cute::Shape<int, int, int>>;          // per-group <M,N,K>
+
+using GemmKernel = cutlass::gemm::kernel::GemmUniversal<
+    ProblemShape,
+    CollectiveMainloop,                    // built with the Schedule tag above
+    CollectiveEpilogue
 >;
+using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
 
 // Launch: single kernel handles all groups
-GemmKernel::Arguments args{
-    num_groups,
-    problem_sizes,   // [num_groups] array of {M_i, N, K}
-    ptr_A, ptr_B, ptr_C,
-    scale_factors_A, scale_factors_B
+Gemm::Arguments args{
+    cutlass::gemm::GemmUniversalMode::kGrouped,
+    {num_groups, problem_sizes, problem_sizes_host},  // device + host copies
+    {ptr_A, stride_A, ptr_B, stride_B,
+     scale_factors_A, layout_SFA, scale_factors_B, layout_SFB},
+    {/* epilogue args */}
 };
-GemmKernel kernel;
-kernel.run(args, stream);
+Gemm gemm_op;
+gemm_op.initialize(args, workspace);
+gemm_op.run(stream);
 ```
 
 ## Tile Scheduling for Variable M

@@ -11,7 +11,7 @@ evidence_basis:
   - source_id: pr-cutlass-2139
     evidence_type: upstream-code
 related: [hw-tcgen05-mma, technique-double-buffering, pattern-register-pressure]
-sources: [pr-cutlass-2139, doc-nvidia-tuning-guide, blog-tcgen05-tutorial, blog-colfax-cutlass]
+sources: [pr-cutlass-2139, doc-nvidia-tuning-guide, doc-ptx-isa-sm100, blog-tcgen05-tutorial, blog-colfax-cutlass]
 aliases: [TMEM, "tensor memory", "Tensor Memory"]
 ---
 
@@ -42,7 +42,7 @@ Row 64-95:  Warp 2, lanes 0-31
 Row 96-127: Warp 3, lanes 0-31
 ```
 
-Each thread "owns" the TMEM row corresponding to its warp and lane. When reading from TMEM, thread `T` in warp `W` accesses row `W*32 + T%32`.
+A warp may access only the 32-lane chunk of its warp index; the mapping from threads to lanes within that chunk depends on the access shape. For `tcgen05.ld/st.32x32b` a warp touches all 32 lanes of its chunk, so thread `T` in warp `W` reads row `W*32 + T%32`; the `.16x64b`, `.16x128b` and `.16x256b` shapes instead have the warp touch only 16 lanes, each carrying correspondingly wider data.
 
 ### Column Addressing
 
@@ -73,9 +73,9 @@ TMEM is **explicitly managed** by the programmer. There is no automatic allocati
 __shared__ uint32_t s_tmem_addr;
 
 __device__ uint32_t tmem_alloc_cta(uint32_t num_cols) {
-    // Only thread 0 allocates; result must reach ALL warps in the CTA.
+    // One whole warp allocates; result must reach ALL warps in the CTA.
     // __shfl_sync is warp-local — it cannot broadcast across warps.
-    if (threadIdx.x == 0) {
+    if (threadIdx.x < 32) {
         uint32_t smem_addr =
             static_cast<uint32_t>(__cvta_generic_to_shared(&s_tmem_addr));
         asm volatile(
@@ -93,14 +93,14 @@ Key points:
 - `num_cols` specifies the number of 32-bit columns to allocate.
 - A 128x256 FP32 accumulator needs 256 columns.
 - Allocation is **CTA-scoped** -- all threads in the CTA share the same TMEM region.
-- Only one thread (typically thread 0) issues the allocation.
+- Exactly one warp of the CTA issues the allocation; `tcgen05.alloc` is a `.sync.aligned` instruction, so all 32 threads of that warp must execute it with identical `num_cols`.
 - The returned `tmem_addr` is the base column index.
 
 ### Deallocation
 
 ```cuda
 __device__ void tmem_dealloc(uint32_t tmem_addr, uint32_t num_cols) {
-    if (threadIdx.x == 0) {
+    if (threadIdx.x < 32) {
         asm volatile(
             "tcgen05.dealloc.cta_group::1.sync.aligned.b32 %0, %1;"
             :
@@ -153,7 +153,7 @@ __global__ void persistent_gemm_kernel(/* ... */) {
 // Each thread writes to its own TMEM row at the specified column
 __device__ void tmem_store_f32(uint32_t tmem_col, float value) {
     asm volatile(
-        "tcgen05.st.sync.aligned.32x1b.x1.b32 [%0], {%1};"
+        "tcgen05.st.sync.aligned.32x32b.x1.b32 [%0], {%1};"
         :
         : "r"(tmem_col), "f"(value)
     );
@@ -162,7 +162,7 @@ __device__ void tmem_store_f32(uint32_t tmem_col, float value) {
 // Vectorized store: 4 consecutive FP32 values
 __device__ void tmem_store_f32x4(uint32_t tmem_col, float4 values) {
     asm volatile(
-        "tcgen05.st.sync.aligned.32x1b.x4.b32 [%0], {%1, %2, %3, %4};"
+        "tcgen05.st.sync.aligned.32x32b.x4.b32 [%0], {%1, %2, %3, %4};"
         :
         : "r"(tmem_col),
           "f"(values.x), "f"(values.y),
@@ -178,7 +178,7 @@ __device__ void tmem_store_f32x4(uint32_t tmem_col, float4 values) {
 __device__ float tmem_load_f32(uint32_t tmem_col) {
     float result;
     asm volatile(
-        "tcgen05.ld.sync.aligned.32x1b.x1.b32 {%0}, [%1];"
+        "tcgen05.ld.sync.aligned.32x32b.x1.b32 {%0}, [%1];"
         : "=f"(result)
         : "r"(tmem_col)
     );
@@ -189,7 +189,7 @@ __device__ float tmem_load_f32(uint32_t tmem_col) {
 __device__ float4 tmem_load_f32x4(uint32_t tmem_col) {
     float4 result;
     asm volatile(
-        "tcgen05.ld.sync.aligned.32x1b.x4.b32 {%0, %1, %2, %3}, [%4];"
+        "tcgen05.ld.sync.aligned.32x32b.x4.b32 {%0, %1, %2, %3}, [%4];"
         : "=f"(result.x), "=f"(result.y),
           "=f"(result.z), "=f"(result.w)
         : "r"(tmem_col)

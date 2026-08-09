@@ -31,8 +31,8 @@ Dequantization: x_hat_i = s_global * s_block * deq_FP4(q_i)
 
 | Variant | Description | Throughput vs Hopper |
 |---|---|---|
-| `tcgen05.mma.mxf4.block_scale` | MX FP4 with block scaling | **4×** |
-| `tcgen05.mma.mxf4nvf4.block_scale` | NVFP4 + MX FP4 flexible scaling | **4×** |
+| `tcgen05.mma.kind::mxf4.block_scale` | MX FP4 with block scaling | **4×** |
+| `tcgen05.mma.kind::mxf4nvf4.block_scale` | NVFP4 + MX FP4 flexible scaling | **4×** |
 
 ## PTX for FP4 Conversion
 

@@ -8,17 +8,14 @@ architectures:
 - sm90
 - sm100
 tags:
-- cute-dsl
-- gemm
-- tma
-- wgmma
 - vectorized-loads
 - shared-memory-optimization
 retrieved_at: '2026-05-20'
-description: Source-map entry imported from KernelPilot for CuTe load/store and shared-memory movement examples.
+description: Source-map entry imported from KernelPilot for ldmatrix/stmatrix load/store and shared-memory movement examples.
 ---
 
-The load_and_store repository is a source-map route for CuTe load/store
-mechanics. It is most useful when converting a profiler symptom into a concrete
-data-movement edit: vector width, layout, shared staging, or TMA-friendly access
-structure.
+The load_and_store repository is a source-map route for `ldmatrix`/`stmatrix`
+load/store mechanics written as inline PTX in plain CUDA C++. It is most useful
+when converting a profiler symptom into a concrete
+data-movement edit: vector width, register fragment layout, and shared-memory
+staging for `ldmatrix`/`stmatrix`.

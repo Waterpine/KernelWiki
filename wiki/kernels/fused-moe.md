@@ -140,17 +140,24 @@ __global__ void gated_dual_gemm_fused(
 
         // Two MMAs per K-tile: gate and up projections
         // Both read same X tile, different weight tiles
+        // disable-output-lane: optional 4-element vector for cta_group::1;
+        // an all-zero mask keeps every output lane enabled
+        uint32_t mask[4] = {0, 0, 0, 0};
         asm volatile(
+            "{\n\t.reg .pred p;\n\tsetp.ne.b32 p, %4, 0;\n\t"
             "tcgen05.mma.cta_group::1.kind::f8f6f4"
-            " [%0], %1, %2, %3, %4;"
+            " [%0], %1, %2, %3, {%5, %6, %7, %8}, p;\n\t}\n"
             :: "r"(tmem_gate), "l"(x_smem[stage]),
-               "l"(wg_smem[stage]), "r"(scales_gate), "n"(1)
+               "l"(wg_smem[stage]), "r"(idesc), "r"(1),
+               "r"(mask[0]), "r"(mask[1]), "r"(mask[2]), "r"(mask[3])
         );
         asm volatile(
+            "{\n\t.reg .pred p;\n\tsetp.ne.b32 p, %4, 0;\n\t"
             "tcgen05.mma.cta_group::1.kind::f8f6f4"
-            " [%0], %1, %2, %3, %4;"
+            " [%0], %1, %2, %3, {%5, %6, %7, %8}, p;\n\t}\n"
             :: "r"(tmem_up), "l"(x_smem[stage]),
-               "l"(wu_smem[stage]), "r"(scales_up), "n"(1)
+               "l"(wu_smem[stage]), "r"(idesc), "r"(1),
+               "r"(mask[0]), "r"(mask[1]), "r"(mask[2]), "r"(mask[3])
         );
     }
 

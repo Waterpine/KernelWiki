@@ -27,10 +27,13 @@ CUDA 13.0 and 13.1 introduce full Blackwell (SM100) support, including new compi
 
 ```cpp
 // tcgen05.mma via PTX inline assembly
+uint32_t mask[4] = {0, 0, 0, 0};   // disable-output-lane: mask nothing
 asm volatile(
+    "{\n\t.reg .pred p;\n\tsetp.ne.b32 p, %4, 0;\n\t"
     "tcgen05.mma.cta_group::1.kind::f16 "
-    "[%0], [%1], [%2];"
-    : : "l"(tmem_addr), "l"(smem_desc_a), "l"(smem_desc_b)
+    "[%0], %1, %2, %3, {%5, %6, %7, %8}, p;\n\t}\n"
+    : : "r"(tmem_addr), "l"(smem_desc_a), "l"(smem_desc_b), "r"(idesc), "r"(1),
+        "r"(mask[0]), "r"(mask[1]), "r"(mask[2]), "r"(mask[3])
 );
 
 // CUDA C++ wrappers via CUTLASS/CuTe
@@ -40,25 +43,32 @@ asm volatile(
 ### TMEM Access
 
 ```cpp
-// TMEM allocation and access (via PTX)
-asm volatile("tcgen05.alloc.cta_group::1 [%0], %1;"
-    : : "l"(tmem_addr), "r"(num_rows));
+// TMEM allocation and access (via PTX).
+// Both alloc and dealloc are .sync.aligned: with .cta_group::1 one whole warp
+// of the CTA must perform the allocation and the deallocation.
+asm volatile("tcgen05.alloc.cta_group::1.sync.aligned.shared::cta.b32 [%0], %1;"
+    : : "r"(smem_dst), "r"(num_cols));
 
-// TMEM to register readback
-asm volatile("tcgen05.ld.16x256b [%0], [%1];"
-    : : "l"(reg_addr), "l"(tmem_addr));
+// TMEM to register readback. .16x256b.x1 loads a 4-register vector (Table 52).
+asm volatile("tcgen05.ld.sync.aligned.16x256b.x1.b32 {%0, %1, %2, %3}, [%4];"
+    : "=r"(reg0), "=r"(reg1), "=r"(reg2), "=r"(reg3) : "r"(tmem_addr));
 
-// TMEM release
-asm volatile("tcgen05.dealloc.cta_group::1 [%0], %1;"
-    : : "l"(tmem_addr), "r"(num_rows));
+// TMEM release (mandatory: all allocated TMEM must be deallocated before the
+// kernel exits)
+asm volatile("tcgen05.dealloc.cta_group::1.sync.aligned.b32 %0, %1;"
+    : : "r"(tmem_addr), "r"(num_cols));
 ```
 
 ### CLC APIs
 
 ```cpp
 // CLC dynamic tile scheduling
-asm volatile("clc.arrive.group::1;"  ::);
-asm volatile("clc.wait.group::1;"    ::);
+asm volatile("clusterlaunchcontrol.try_cancel.async.shared::cta"
+             ".mbarrier::complete_tx::bytes.b128 [%0], [%1];"
+    :: "r"(clc_response_addr), "r"(clc_mbar_addr) : "memory");
+// then, after waiting on the mbarrier:
+//   ld.shared.b128 handle, [clc_response];
+//   clusterlaunchcontrol.query_cancel.is_canceled.pred.b128 p, handle;
 
 // CLC replaces manual tile queue management
 // Hardware schedules tiles to available SMs
@@ -79,15 +89,18 @@ __nv_fp4_e2m1 val;
 __nv_fp8_e4m3 scale;
 
 // Conversion intrinsics
-__half2 result = __cvt_fp4x2_to_halfx2(packed_fp4);
+__half2_raw result = __nv_cvt_fp4x2_to_halfraw2(packed_fp4, __NV_E2M1);
 ```
 
-### PDL Default Enabled
+### PDL (Opt-In per Launch)
 
-Programmatic Dependent Launch is on by default in CUDA 13.0:
-- Overlapping dependent kernel executions
-- Grid Dependency Control (GDC) for explicit dependency management
-- Near-zero gap between dependent kernel launches
+Programmatic Dependent Launch is available from compute capability 9.0 and is
+opt-in per launch:
+- The secondary kernel must be launched with
+  `cudaLaunchAttributeProgrammaticStreamSerialization` via `cudaLaunchKernelEx`
+- The primary kernel calls `cudaTriggerProgrammaticLaunchCompletion()`; the
+  secondary calls `cudaGridDependencySynchronize()` before reading its results
+- Overlap is opportunistic and not guaranteed to produce concurrent execution
 
 ## CUDA 13.1 Additions
 
@@ -111,14 +124,14 @@ Key new PTX instructions for SM100:
 | Instruction | Purpose |
 |---|---|
 | `tcgen05.mma.*` | Tensor core MMA (7 variants) |
-| `tcgen05.alloc` | Allocate TMEM rows |
-| `tcgen05.dealloc` | Release TMEM rows |
+| `tcgen05.alloc` | Allocate TMEM columns |
+| `tcgen05.dealloc` | Release TMEM columns |
 | `tcgen05.ld` | Load from TMEM to registers |
 | `tcgen05.st` | Store from registers to TMEM |
-| `clc.arrive` | CLC tile arrival |
-| `clc.wait` | CLC tile wait |
+| `clusterlaunchcontrol.try_cancel` | Request cancellation of a not-yet-launched cluster |
+| `clusterlaunchcontrol.query_cancel` | Interpret the try_cancel response |
 | `cvt.rn.f16x2.e2m1x2` | FP4 to FP16 conversion |
-| `cvt.rn.e2m1x2.f16x2` | FP16 to FP4 conversion |
+| `cvt.rn.satfinite.e2m1x2.f16x2` | FP16 to FP4 conversion |
 
 ## Compiler Flags for SM100
 

@@ -77,6 +77,11 @@ __global__ void lightning_indexer_kernel(
     tcgen05_mma_f8(q_smem, k_block_smem, tmem);
     // Reduce inside block to max score
     // Write per-block score
+
+    // TMEM must be released before the kernel exits (PTX ISA 9.3
+    // section 9.7.17.7.1); tmem_dealloc issues tcgen05.dealloc from one
+    // whole warp, as .cta_group::1 requires.
+    tmem_dealloc(tmem, 64);
 }
 
 // Separate top-K selection kernel across the num_blocks score array

@@ -34,8 +34,9 @@ Nsight Compute shows high DRAM throughput but low tensor core utilization. Arith
 ```cuda
 // NVFP4 GEMV: memory-bound optimization
 // Key insight: profile FIRST to confirm memory-bound behavior
-// "The single most important thing could have been running Nsight Compute"
-// — Amandeep (12 Attempts at an FP4 Kernel)
+// "The single most important thing I could have done after attempt 7 was
+//  run Nsight Compute and confirm the kernel was memory-bound."
+// — Amandeep (Twelve Attempts at an FP4 Kernel)
 
 // Optimization priorities for memory-bound kernels:
 // 1. Maximize memory bandwidth (wide loads, coalescing)

@@ -40,7 +40,7 @@ Rank 1 submission used **different qualifiers per K-dimension variant**:
 
 ## Measurable Impact
 
-- NVFP4 GEMV: 443μs → 27μs (16x improvement) came partly from cache policy + PTX byte unpacking
+- NVFP4 GEMV: the top solutions (~18.5μs geomean, roughly 2x speed of light) all used per-stream cache policies; the participant journey that reported 443μs → 27μs reached it with vectorized loads, hardware intrinsics and a PTX decode path rather than cache qualifiers
 - On memory-bound kernels, cache policy can be the dominant lever
 
 ## When To Use

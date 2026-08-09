@@ -28,7 +28,7 @@ artifact_dir: artifacts/kernels/ping-pong-scheduling
 
 ## Overview
 
-Ping-pong scheduling alternates two query tiles within a single CTA so the softmax warpgroup never stalls waiting for MMA. Introduced in FlashAttention-4 to exploit Blackwell's asymmetric hardware (2× tensor cores, same SFU count as Hopper).
+Ping-pong scheduling alternates two query tiles within a single CTA so the softmax warpgroup never stalls waiting for MMA. Introduced for Hopper in FlashAttention-3 and carried into FlashAttention-4, where it exploits Blackwell's asymmetric hardware (2× tensor cores, same SFU count as Hopper).
 
 ## Pattern
 
@@ -57,6 +57,11 @@ __global__ void fa4_ping_pong_attn(...) {
         mbarrier_arrive(&ping_pong_sync);
         mbarrier_wait(&ping_pong_sync);
     }
+
+    // Release both TMEM allocations before the kernel exits (whole warp,
+    // .sync.aligned, reverse allocation order).
+    tmem_dealloc(tmem_B, 256);
+    tmem_dealloc(tmem_A, 256);
 }
 ```
 
@@ -64,14 +69,14 @@ __global__ void fa4_ping_pong_attn(...) {
 
 - Tensor core throughput doubled (B200 vs H100) but SFU count unchanged
 - Single-tile schedule would leave SFU idle while MMA runs, and vice versa
-- Ping-pong keeps both units 100% busy
+- Ping-pong overlaps the two so neither unit idles waiting for the other, though in practice the overlap is not perfect
 - FA4 achieves 1605 TFLOPS BF16 (71% utilization) with this pattern
 
 ## When To Use
 
 - Compute-bound attention kernels on Blackwell
 - Kernels where softmax/epilogue is SFU-heavy
-- Not useful on Hopper (balance is different)
+- Also beneficial on Hopper: FlashAttention-3 generally found it to improve performance, e.g. from 570 to 620-640 TFLOPS for the FP16 forward pass at head dimension 128 and sequence length 8192
 
 ## Full Reference Implementation
 

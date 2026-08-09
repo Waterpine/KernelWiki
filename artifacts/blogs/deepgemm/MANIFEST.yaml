@@ -12,7 +12,7 @@ files:
   heading_path: "## Key Code > ### SM100 path \u2014 tcgen05.mma with UE8M0 block\
     \ scaling"
   fence_lang: cpp
-  sha256: c0361a1bc706b1967de7ad057ddfa4abf1834992599085b0a649ac6f7a77d4b8
+  sha256: f9f223f3c0f652e2ff2e13615c1140cfada5857b12c9c91e4a1f093db0310b7e
 - local_path: code/03-moe-grouped-gemm-launch.cpp
   heading_path: '## Key Code > ### MoE grouped-GEMM launch'
   fence_lang: cpp

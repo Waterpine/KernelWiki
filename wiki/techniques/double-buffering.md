@@ -45,15 +45,27 @@ __device__ void tmem_double_buffer_mainloop(
     int warp_id = threadIdx.x / 32;
     int lane_id = threadIdx.x % 32;
 
+    // Warp roles follow CUTLASS 4.5.0's SM100 WarpCategory split
+    // (8 warps / 256 threads per CTA):
+    //   warp 0    = MMA          warp 1 = Sched (CLC)
+    //   warp 2    = MainloopLoad warp 3 = EpilogueLoad
+    //   warps 4-7 = Epilogue
+    // Warps 1-3 are omitted from this snippet; see warp-specialization.
+    constexpr int MMA_WARP           = 0;
+    constexpr int FIRST_EPILOGUE_WARP = 4;
+    constexpr int NUM_EPILOGUE_WARPS  = 4;   // warps 4-7
+
     // Synchronization between MMA warp and epilogue warps
     __shared__ uint64_t mbar_acc_ready[2];   // MMA done, epilogue can read
     __shared__ uint64_t mbar_acc_drained[2]; // Epilogue done, MMA can reuse
 
     if (threadIdx.x == 0) {
+        // One arrival from the single MMA warp...
         mbarrier_init(&mbar_acc_ready[0], 1);
         mbarrier_init(&mbar_acc_ready[1], 1);
-        mbarrier_init(&mbar_acc_drained[0], 1);
-        mbarrier_init(&mbar_acc_drained[1], 1);
+        // ...but one arrival from EACH epilogue warp on the drain barrier.
+        mbarrier_init(&mbar_acc_drained[0], NUM_EPILOGUE_WARPS);
+        mbarrier_init(&mbar_acc_drained[1], NUM_EPILOGUE_WARPS);
     }
     __syncthreads();
 
@@ -61,7 +73,7 @@ __device__ void tmem_double_buffer_mainloop(
         int buf = tile % 2;
         int tmem_offset = buf ? TMEM_BUF_B_OFFSET : TMEM_BUF_A_OFFSET;
 
-        if (warp_id == 1) {
+        if (warp_id == MMA_WARP) {
             // === MMA WARP ===
             // Wait for epilogue to finish draining this buffer
             if (tile >= 2) {
@@ -88,14 +100,14 @@ __device__ void tmem_double_buffer_mainloop(
                 mbarrier_arrive(&mbar_acc_ready[buf]);
             }
 
-        } else if (warp_id >= 2) {
-            // === EPILOGUE WARPS ===
+        } else if (warp_id >= FIRST_EPILOGUE_WARP) {
+            // === EPILOGUE WARPS (4-7) ===
             // Wait for MMA to finish accumulating
             mbarrier_wait(&mbar_acc_ready[buf]);
 
             // Read TMEM and store to global memory
-            int rows_per_warp = TILE_M / 14;
-            int my_row = (warp_id - 2) * rows_per_warp;
+            int rows_per_warp = TILE_M / NUM_EPILOGUE_WARPS;
+            int my_row = (warp_id - FIRST_EPILOGUE_WARP) * rows_per_warp;
             for (int r = my_row; r < my_row + rows_per_warp; r++) {
                 for (int c = lane_id; c < TMEM_COLS_PER_BUF; c += 32) {
                     float val = tmem_load_f32(r, tmem_offset + c);
@@ -106,8 +118,8 @@ __device__ void tmem_double_buffer_mainloop(
 
             // All epilogue warps must finish reading TMEM before the MMA
             // warp can overwrite this half-buffer. Each epilogue warp arrives
-            // on a shared mbarrier; the mbarrier is initialized with
-            // arrival_count = NUM_EPILOGUE_WARPS (e.g. 14 for warps 2-15).
+            // once on the shared mbarrier, which was initialized above with
+            // arrival_count = NUM_EPILOGUE_WARPS.
             // The MMA warp waits on this mbarrier before reusing the buffer.
             if (lane_id == 0) {
                 mbarrier_arrive(&mbar_acc_drained[buf]);
@@ -178,13 +190,13 @@ __device__ void full_double_buffered_gemm(const GemmParams& params) {
     for (int out_tile = 0; out_tile < num_output_tiles; out_tile++) {
         int tmem_buf = out_tile % 2;
 
-        if (warp_id == 0) {
-            // TMA producer: fill SMEM stages for this output tile's K-loop
+        if (warp_id == 2) {
+            // MainloopLoad: fill SMEM stages for this output tile's K-loop
             tma_producer_loop(params, out_tile);
-        } else if (warp_id == 1) {
+        } else if (warp_id == 0) {
             // MMA: consume SMEM stages, accumulate into TMEM[tmem_buf]
             mma_consumer_loop(params, tmem_buf);
-        } else {
+        } else if (warp_id >= 4) {
             // Epilogue: drain TMEM[1-tmem_buf] from previous tile
             if (out_tile > 0) {
                 epilogue_drain(params, out_tile - 1, 1 - tmem_buf);
@@ -196,7 +208,7 @@ __device__ void full_double_buffered_gemm(const GemmParams& params) {
     }
 
     // Final epilogue for last tile
-    if (warp_id >= 2) {
+    if (warp_id >= 4) {
         epilogue_drain(params, num_output_tiles - 1,
                        (num_output_tiles - 1) % 2);
     }
@@ -217,8 +229,11 @@ float acc_buf0[REG_TILE_M][REG_TILE_N];  // First accumulator
 float acc_buf1[REG_TILE_M][REG_TILE_N];  // Second accumulator
 // Total: 2 * REG_TILE_M * REG_TILE_N * 4 bytes per thread
 // For a 64x256 tile with 128-thread warpgroup:
-//   each thread holds 2 * (64/4) * (256/128) * 4 = 2 * 16 * 2 * 4 = 256 bytes
-//   = 64 registers just for accumulators
+//   PTX gives wgmma.mma_async.m64nNk16's .f32 accumulator N/2 = 128
+//   registers per thread, so two buffers cost 2 * 128 * 4 = 1024 bytes
+//   = 256 registers just for accumulators (above the 255-register
+//   per-thread limit, so a tile this wide cannot be register
+//   double-buffered at all)
 
 // Blackwell approach: TMEM holds both buffers with zero register cost
 // MMA warp uses ~0 registers for accumulators

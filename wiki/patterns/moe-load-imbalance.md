@@ -6,7 +6,7 @@ tags: [moe, grouped-gemm, tile-scheduling, clc]
 symptoms: [load-imbalance, tail-effect, low-sm-utilization]
 candidate_techniques: [technique-tile-scheduling, technique-persistent-kernels, technique-kernel-fusion]
 related: [kernel-grouped-gemm, kernel-fused-moe, pattern-tail-effect]
-sources: [contest-gpumode-p4, contest-flashinfer-track-a, blog-deepgemm]
+sources: [contest-gpumode-p4, contest-flashinfer-track-a, doc-ptx-isa-sm100, blog-deepgemm]
 ---
 
 # MoE Expert Load Imbalance
@@ -43,7 +43,7 @@ This highlighted that even careful tile scheduling can be outrun by algorithmic 
 
 ## Caveats
 
-- CLC only available on SM100 datacenter (not SM120 consumer)
+- CLC requires `sm_100` or higher; SM120 parts are also supported
 - Dynamic scheduling has small per-tile overhead vs static precomputed
 - Small experts may not benefit — minimum viable tile size is a floor
 - EPLB works at cluster scale, not single-device

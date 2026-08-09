@@ -108,13 +108,15 @@ On Blackwell (SM100), the tcgen05.mma instruction with TMEM accumulation uses na
 uint32_t packed_scales = pack_ue8m0(sf[0], sf[1], sf[2], sf[3]);
 
 // tcgen05.mma reads A/B from SMEM, accumulates into TMEM
-// Block scale applied natively during MMA
+// Block scale applied natively during MMA.
+// enable-input-d is a .pred operand -- derive it with setp, never pass %6 raw.
 asm volatile(
-    "tcgen05.mma.cta_group::1.kind::f8f6f4"
-    " [%0], %1, %2, %3, %4;"
+    "{\n\t.reg .pred p;\n\tsetp.ne.b32 p, %6, 0;\n\t"
+    "tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale"
+    " [%0], %1, %2, %3, [%4], [%5], p;\n\t}\n"
     :
-    : "l"(tmem_addr), "l"(a_smem_addr), "l"(b_smem_addr),
-      "r"(packed_scales), "n"(SCALE_D_ENABLED)
+    : "r"(tmem_addr), "l"(desc_a), "l"(desc_b), "r"(idesc),
+      "r"(sfa_tmem_addr), "r"(sfb_tmem_addr), "r"(1)
 );
 ```
 

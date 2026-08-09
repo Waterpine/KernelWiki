@@ -13,7 +13,7 @@ sources: [blog-flash-attention-4, doc-flash-attention-4, doc-ptx-isa-sm100]
 
 ## Overview
 
-FlashAttention-4 replaces the hardware Special Function Unit (SFU) exponential (`ex2.approx`) with a software-emulated 2^x function that distributes computation across the SM's FMA (fused multiply-add) units. On Blackwell, tensor core throughput doubled compared to Hopper while SFU count remained the same, making the SFU the throughput bottleneck for attention's softmax operation. The software exponential uses Cody-Waite range reduction followed by a Horner-form polynomial evaluation, achieving sufficient accuracy for attention while bypassing the SFU entirely.
+FlashAttention-4 runs a software-emulated 2^x function on the SM's FMA (fused multiply-add) units alongside the hardware Special Function Unit (SFU) exponential (`ex2.approx`, `MUFU.EX2`), using FMA units that would otherwise be underutilized. On Blackwell, tensor core throughput doubled compared to Hopper while SFU count remained the same, making the SFU the throughput bottleneck for attention's softmax operation. The software exponential uses Cody-Waite range reduction followed by a Horner-form polynomial evaluation, achieving sufficient accuracy for attention while keeping that share of the exponential work off the SFU.
 
 ## Why SFU Is a Bottleneck on Blackwell
 
@@ -28,7 +28,7 @@ The softmax in attention requires computing `exp(x - max)` for every element of 
 
 The tensor cores produce 2x more score elements per cycle, but the SFU can only process exp() at the same rate as before. This makes the SFU the bottleneck for any kernel that needs exp() proportional to the number of MMA outputs.
 
-FlashAttention-4's approach: distribute the exp() workload across FMA units (128 per SM) instead of SFU units (16 per SM), achieving 8x the throughput for the exponential computation.
+FlashAttention-4's approach: distribute the exp() workload across both paths — the hardware `MUFU.EX2` units and the FMA units that would otherwise be underutilized — so that the exponential is no longer limited by SFU throughput alone.
 
 ## Cody-Waite Range Reduction
 
@@ -58,8 +58,8 @@ __device__ float software_exp2(float x) {
     float r = x - n;          // r in [-0.5, 0.5]
 
     // Step 2: Polynomial approximation of 2^r via Horner's method
-    // Minimax polynomial coefficients for 2^r on [-0.5, 0.5]
-    // Degree-4 polynomial: sufficient for ~22 bits of accuracy
+    // Truncated Taylor coefficients for 2^r = e^(r ln 2) on [-0.5, 0.5]
+    // Degree-4 polynomial: about 14-15 bits of accuracy at the interval ends
     const float c0 = 1.0f;
     const float c1 = 0.6931471805599453f;   // ln(2)
     const float c2 = 0.2402265069591007f;   // ln(2)^2 / 2
@@ -159,15 +159,16 @@ At the PTX level, the Horner polynomial compiles to a tight chain of `fma.rn.f32
 // Input: %x (float, range-reduced to [-0.5, 0.5])
 // Output: %result (float, approximation of 2^x)
 
-.reg .f32 %x, %r, %n, %poly, %result;
+.reg .f32 %x, %r, %n, %poly, %scale, %result;
 .reg .f32 %c0, %c1, %c2, %c3, %c4;
+.reg .s32 %ni;
 
 // Load polynomial coefficients
 mov.f32 %c0, 0f3F800000;    // 1.0
 mov.f32 %c1, 0f3F317218;    // 0.6931471805599453  (ln2)
 mov.f32 %c2, 0f3E75FDF0;    // 0.2402265069591007
 mov.f32 %c3, 0f3D635847;    // 0.05550410866482158
-mov.f32 %c4, 0f3C1D9539;    // 0.009618129107628477
+mov.f32 %c4, 0f3C1D955B;    // 0.009618129107628477
 
 // Range reduction: n = rintf(x), r = x - n
 cvt.rni.f32.f32 %n, %x;     // Round to nearest int
@@ -194,7 +195,7 @@ mul.f32         %result, %poly, %scale;
 
 ## Accuracy Considerations
 
-The degree-4 polynomial provides approximately 22 bits of mantissa accuracy, which is more than sufficient for attention softmax where:
+The degree-4 polynomial provides about 14-15 bits of mantissa accuracy at the ends of the reduction interval (relative error 3.1e-05 at r = 0.5 and 5.6e-05 at r = -0.5), improving rapidly toward r = 0. That is still ample for attention softmax where:
 - The input `x = (S[i,j] - max) * log2(e)` is always non-positive
 - The softmax output is normalized, so small absolute errors cancel out
 - BF16 output has only 7 mantissa bits anyway
@@ -203,7 +204,7 @@ For applications requiring higher accuracy, a degree-6 polynomial (6 FMAs) achie
 
 ## When to Use
 
-- **Attention kernels on Blackwell**: Whenever the SFU is the bottleneck for softmax computation. FlashAttention-4 measured 1.1-1.3x speedup over cuDNN from this technique alone on B200.
+- **Attention kernels on Blackwell**: Whenever the SFU is the bottleneck for softmax computation. FlashAttention-4 reports 1.1-1.3x over cuDNN 9.13 on B200 for the complete kernel, to which this technique is one of several contributing changes.
 - **Any kernel limited by transcendental function throughput**: If profiling shows SFU utilization near 100% while FMA utilization is low, software emulation can rebalance the workload.
 - **Not recommended on Hopper**: The SFU-to-MMA throughput ratio is better balanced on SM90. The overhead of 4 FMAs vs 1 SFU instruction is not justified unless the SFU is proven to be the bottleneck.
 

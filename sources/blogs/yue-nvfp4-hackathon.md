@@ -15,7 +15,6 @@ tags:
 - batched-gemv
 techniques:
 - vectorized-loads
-- cache-policy
 - register-reuse
 - loop-unrolling
 hardware_features:
@@ -44,7 +43,7 @@ Yue Zhang's detailed account of optimizing Problem 1 (NVFP4 Batched GEMV) in the
 | Stage | Approach | Latency | Improvement |
 |-------|----------|---------|-------------|
 | 1 | CuTe DSL baseline | ~100us | -- |
-| 2 | Naive CUDA (coalesced access) | ~443us | (worse than CuTe initially) |
+| 2 | CUDA + coalesced access + thread collaboration (from a 2000us naive CUDA start) | ~443us | 4.5x from naive CUDA, still worse than CuTe |
 | 3 | Hardware intrinsics | ~39us | 11.4x from stage 2 |
 | 4 | PTX assembly | ~27us | 1.44x from stage 3 |
 | 5 | ILP optimization | ~22.9us | 1.18x from stage 4 |
@@ -68,7 +67,7 @@ CuTe DSL provided a functional baseline without requiring deep hardware knowledg
 
 ### Step 2: Coalesced Memory Access (~443us, then improved)
 
-Initial hand-written CUDA was actually slower because the memory access pattern was not properly coalesced:
+The from-scratch CUDA implementation started at ~2000us because the memory access pattern was not properly coalesced:
 
 ```cpp
 // Bad: each thread reads non-contiguous FP4 elements
@@ -77,7 +76,7 @@ Initial hand-written CUDA was actually slower because the memory access pattern 
 // to maintain coalesced access at the byte level
 ```
 
-After fixing coalescing, performance improved dramatically but still required hardware-specific optimizations.
+Fixing coalescing, adding thread collaboration per row and a warp-level reduction brought it to ~443us — a 4.5x gain that was still slower than the ~100us CuTe DSL template, so hardware-specific optimizations were still needed.
 
 ### Step 3: Hardware Intrinsics (~39us)
 
@@ -88,10 +87,10 @@ Replaced generic type conversions with NVIDIA FP4 hardware intrinsics:
 // float val = decode_fp4_manual(packed_byte >> 4);  // slow
 
 // Hardware intrinsic: single instruction for FP4 -> FP16x2
-// __half2 result = __cvt_fp4x2_to_halfx2(packed_fp4);  // fast
+// __half2_raw result = __nv_cvt_fp4x2_to_halfraw2(packed_fp4, __NV_E2M1);  // fast
 ```
 
-The hardware intrinsic path is 11.4x faster than the manual approach, demonstrating the importance of using ISA-specific instructions for sub-byte data types.
+Removing the shared-memory staging, switching to vectorized float4 loads and using the hardware intrinsics together gave 11.4x (443us → 39us), the largest single step in the journey.
 
 ### Step 4: PTX Assembly (~27us)
 
@@ -106,9 +105,9 @@ cvt.rn.f16x2.e2m1x2 %result, %fp4_packed;
 mov.b32 {b0, b1, b2, b3}, %packed_word;
 // Splits 32-bit word into 4 bytes without arithmetic
 
-// 3. Cache-qualified loads
-ld.global.L1::no_allocate.v4.u64 {a0,a1,a2,a3}, [addr_a];  // stream A
-ld.global.L1::evict_last.v4.u64 {b0,b1,b2,b3}, [addr_b];   // keep B hot
+// 3. Fused packed-half multiply-accumulate on the decoded values
+mul.rn.f16x2 %p0, %a0, %b0;
+fma.rn.f16x2 %p0, %a1, %b1, %p0;
 ```
 
 The PTX byte unpacking (`mov.b32 {a,b,c,d}`) is a critical optimization: it replaces 3-4 shift/mask instructions with a single register move, and the savings compound across the entire K dimension.
@@ -132,9 +131,9 @@ for (int k = 0; k < K; k += 16) {
 ### Final Result: 22.392us
 
 The final kernel combined all optimizations. Key factors in the 4.5x total improvement:
-1. Hardware FP4 conversion intrinsics (biggest single win)
+1. Hardware FP4 conversion intrinsics, together with removing shared memory and vectorized float4 loads (largest single step: 443us → 39us)
 2. PTX byte unpacking (avoids bitwise overhead)
-3. Cache policy differentiation (A: no-allocate, B: evict-last)
+3. Fused f16x2 decode-and-accumulate in PTX (aggressive PTX fusion)
 4. ILP through unrolling and register interleaving
 5. Proper memory coalescing for FP4 packed data
 

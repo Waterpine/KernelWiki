@@ -6,9 +6,9 @@ architectures: [sm100, sm100a, sm90, sm90a]
 tags: [tma, mbarrier]
 confidence: source-reported
 related: [hw-tcgen05-mma, technique-pipeline-stages, technique-swizzling]
-sources: [doc-nvidia-tuning-guide, blog-tcgen05-tutorial, pr-flashinfer-2387]
+sources: [doc-nvidia-tuning-guide, doc-ptx-isa-sm100, blog-tcgen05-tutorial, pr-flashinfer-2387]
 aliases: [TMA, "tensor memory accelerator", "cp.async.bulk"]
-blackwell_relevance: "TMA is shared with Hopper but enhanced on Blackwell. 128-byte swizzling mandatory for tcgen05 inputs."
+blackwell_relevance: "TMA is shared with Hopper but enhanced on Blackwell. The TMA swizzle mode must match the swizzle mode encoded in the tcgen05 shared memory descriptor; several modes are valid, not only 128-byte."
 ---
 
 # Tensor Memory Accelerator (TMA)
@@ -25,8 +25,8 @@ TMA offloads data movement from CUDA cores entirely -- a single thread issues th
 |---|---|
 | Transfer direction | GMEM <-> SMEM (bidirectional) |
 | Dimensionality | 1D to 5D tensor copies |
-| Max transfer size | Up to 256 bytes per element, tiles up to 128x256 |
-| Swizzle modes | None, 32B, 64B, 128B (128B required for tcgen05) |
+| Max box (tile) size | Up to 256 elements per dimension (`boxDim[i] <= 256`), with `boxDim[0] * sizeof(element)` a multiple of 16 bytes |
+| Swizzle modes | None, 32B, 64B, 128B (must match the swizzle field of the tcgen05 shared memory descriptor) |
 | Format conversion | FP32<->BF16, FP32<->FP16 during transfer |
 | Multicast | Single GMEM tile -> multiple CTAs in a cluster |
 | Synchronization | mbarrier-based (arrive/wait) |
@@ -87,18 +87,21 @@ CUtensorMap create_tma_descriptor_2d(
 }
 ```
 
-### Blackwell Requirement: 128-Byte Swizzle
+### Blackwell Requirement: TMA Swizzle Must Match the SMEM Descriptor
 
-On Blackwell, `tcgen05.mma` requires operands in **128-byte swizzled** SMEM layout. If TMA loads data without 128B swizzling, the MMA will produce incorrect results.
+`tcgen05.mma` accepts several swizzling modes: all modes are valid for K-major
+operands, all except 128-byte-with-32-byte-atomicity for MN-major 8/16-bit
+operands, and only 128-byte-with-32-byte-atomicity for MN-major 32-bit operands.
+What matters is that the mode encoded in bits 61-63 of the shared memory
+descriptor matches the layout the TMA actually wrote.
 
 ```cuda
-// CORRECT for Blackwell tcgen05:
+// The TMA swizzle mode and the descriptor swizzle field must agree:
 CUtensorMap desc = create_tma_descriptor_2d(ptr, M, N, 128, 64, 128);
-//                                                     swizzle=128 ^^^
+// -> shared memory descriptor swizzle field must be 2 (128-Byte swizzling)
 
-// WRONG for tcgen05 (will silently produce garbage):
-CUtensorMap desc = create_tma_descriptor_2d(ptr, M, N, 128, 64, 0);
-//                                                     swizzle=0 ^^^
+CUtensorMap desc = create_tma_descriptor_2d(ptr, M, N, 128, 64, 64);
+// -> shared memory descriptor swizzle field must be 4 (64-Byte swizzling)
 ```
 
 ## Asynchronous Copy Operations
@@ -148,7 +151,7 @@ __device__ void tma_store_tile(
 ) {
     if (threadIdx.x == 0) {
         asm volatile(
-            "cp.async.bulk.tensor.2d.global.shared::cta "
+            "cp.async.bulk.tensor.2d.global.shared::cta.bulk_group "
             "[%0, {%1, %2}], [%3];"
             :
             : "l"(desc),
@@ -194,16 +197,25 @@ __device__ void pipelined_mainloop(
         // Wait for data to arrive in this stage
         mbarrier_wait(mbar[stage]);
 
-        // Issue MMA using this stage's SMEM buffers
+        // Issue MMA using this stage's SMEM buffers.
+        // disable-output-lane is an optional 4-element vector for
+        // cta_group::1; all-zero keeps every lane enabled, and the operand
+        // may be dropped entirely. enable-input-d is a predicate.
+        uint32_t mask[4] = {0, 0, 0, 0};
         if (threadIdx.x == 0) {
             asm volatile(
+                "{\n\t"
+                ".reg .pred p;\n\t"
+                "setp.ne.b32 p, %4, 0;\n\t"
                 "tcgen05.mma.cta_group::1.kind::f16 "
-                "[%0], %1, %2, %3, 1;"
+                "[%0], %1, %2, %3, {%5, %6, %7, %8}, p;\n\t"
+                "}\n"
                 :
                 : "r"(tmem_acc),
                   "l"(make_desc(smem_a_stages[stage])),
                   "l"(make_desc(smem_b_stages[stage])),
-                  "r"(0)
+                  "r"(0), "r"(1),
+                  "r"(mask[0]), "r"(mask[1]), "r"(mask[2]), "r"(mask[3])
             );
         }
 
@@ -303,9 +315,9 @@ Result: B bandwidth is halved (1 GMEM read serves 2 CTAs)
 
 ## Blackwell-Specific Enhancements
 
-### 128-Byte Swizzle for tcgen05
+### Swizzling for tcgen05
 
-All TMA loads feeding `tcgen05.mma` must use 128-byte swizzling. The swizzle pattern rearranges bytes within each 128-byte line to match the tensor core's internal data layout:
+TMA loads feeding `tcgen05.mma` may use any swizzling mode the operand's type-size and major-ness admit; 128-byte swizzling is the common choice for K-major 16-bit operands. The swizzle pattern rearranges bytes within each 128-byte line to match the tensor core's internal data layout:
 
 ```
 Without swizzle (linear):
@@ -339,33 +351,36 @@ GMEM --[TMA]--> SMEM --[tcgen05.mma]--> TMEM --[tcgen05.ld]--> Registers --[st.g
 |---|---|
 | Maximize TMA utilization | Keep the TMA unit busy with back-to-back loads across pipeline stages |
 | Use multicast for shared operands | Reduces GMEM bandwidth by cluster_size x for shared tiles |
-| Always use 128B swizzle on Blackwell | Non-128B swizzle produces incorrect tcgen05 results |
+| Match TMA swizzle to the SMEM descriptor | tcgen05 reads the swizzle mode from the descriptor; a mismatch between it and the layout TMA wrote produces incorrect results |
 | Prefer 2D TMA over manual addressing | TMA handles out-of-bounds clamping, padding, and strided access |
 | Pipeline depth | 3-5 stages typically optimal; more stages increase SMEM usage |
 
 ## CuTe-DSL Example
 
 ```python
-# CuTe-DSL TMA copy setup for Blackwell GEMM
-from cute import *
+# CuTe-DSL TMA atom setup for a Blackwell GEMM
+import cutlass.cute as cute
+from cutlass.cute.nvgpu import tcgen05
 
-# Define TMA copy atom for operand A (BF16, 128x64 tile)
-tma_a = make_tma_copy(
-    SM100_TMA_LOAD_2D,
-    tensor_a,                      # global tensor
-    smem_layout_a,                 # shared memory layout
-    tile_shape=(128, 64),          # tile dimensions
-    swizzle=Swizzle(7, 0, 4),     # 128-byte swizzle
-    multicast_mask=None            # no multicast for A
+# Operand A: plain bulk-tensor copy, global -> shared
+op_a = cute.nvgpu.cpasync.CopyBulkTensorTileG2SOp()
+tma_atom_a, a_tma_tensor = cute.nvgpu.make_tiled_tma_atom_A(
+    op_a,
+    tensor_a,                # global tensor
+    a_smem_layout_slice,     # shared-memory layout of one stage
+    mma_tiler_mnk,
+    tiled_mma,
+    cluster_layout_vmnk.shape,
 )
 
-# Define TMA copy atom for operand B with multicast
-tma_b = make_tma_copy(
-    SM100_TMA_LOAD_2D_MULTICAST,
+# Operand B: multicast the same tile to every CTA of the cluster
+op_b = cute.nvgpu.cpasync.CopyBulkTensorTileG2SMulticastOp(tcgen05.CtaGroup.ONE)
+tma_atom_b, b_tma_tensor = cute.nvgpu.make_tiled_tma_atom_B(
+    op_b,
     tensor_b,
-    smem_layout_b,
-    tile_shape=(64, 256),
-    swizzle=Swizzle(7, 0, 4),     # 128-byte swizzle
-    multicast_mask=cluster_mask    # multicast B to all CTAs in cluster
+    b_smem_layout_slice,
+    mma_tiler_mnk,
+    tiled_mma,
+    cluster_layout_vmnk.shape,
 )
 ```

@@ -15,7 +15,7 @@ blackwell_relevance: "mbarrier is the primary synchronization primitive between 
 
 ## Overview
 
-mbarriers are 64-bit shared memory primitives used for producer/consumer synchronization between asynchronous hardware units (TMA, tcgen05) and SM threads. Introduced on Hopper, essential for Blackwell warp-specialized kernels.
+mbarriers are 64-bit shared memory primitives used for producer/consumer synchronization between asynchronous hardware units (TMA, tcgen05) and SM threads. Introduced on Ampere (`sm_80`, PTX ISA 7.0); the `expect_tx` transaction-count extension that TMA relies on requires `sm_90` or higher. Essential for Blackwell warp-specialized kernels.
 
 ## Key Operations
 

@@ -17,43 +17,53 @@ CuTe (CUDA Templates) DSL is the primary abstraction layer in CUTLASS 4.5.0 for 
 ## SM100 MMA Atoms
 
 ```python
-# CuTe-DSL: SM100 MMA atom for BF16
-from cutlass.cute import *
+# CuTe-DSL: SM100 MMA operation for FP16/BF16
+import cutlass
+import cutlass.cute as cute
+from cutlass.cute.nvgpu import tcgen05
 
-# 1-SM MMA: m128 x n256 x k16
-mma_atom = SM100_MMA_F16BF16_SS  # inputs from shared memory
-# Accumulator goes to TMEM automatically
-
-# 2-SM MMA: m256 x n256 x k16
-mma_atom_2sm = SM100_MMA_F16BF16_SS_2SM
+# 1-SM MMA (cta_group::1); the accumulator lives in TMEM
+op = tcgen05.MmaF16BF16Op(
+    io_dtype,                       # e.g. cutlass.BFloat16
+    acc_dtype,                      # e.g. cutlass.Float32
+    mma_inst_shape_mnk,             # e.g. (128, 256, 16)
+    tcgen05.CtaGroup.ONE,           # tcgen05.CtaGroup.TWO for the 2-CTA instruction
+    tcgen05.OperandSource.SMEM,     # A and B read from shared memory
+    tcgen05.OperandMajorMode.K,
+    tcgen05.OperandMajorMode.K,
+)
+tiled_mma = cute.make_tiled_mma(op)
 ```
 
 ## TMEM as CuTe Locale
 
 ```python
-# TMEM allocation in CuTe
-tmem_tensor = make_tensor(
-    make_tmem_ptr(tmem_addr),
-    make_layout(make_shape(128, 256))  # rows x cols
-)
+# The accumulator tensor comes from the tiled MMA; TMEM is allocated by the
+# kernel via tcgen05.alloc (see utils.blackwell_helpers) rather than by hand.
+tmem_tensor = tiled_mma.make_fragment_C(acc_shape)
 
-# Copy TMEM → registers for epilogue
-copy(tmem_tensor, reg_tensor)  # tcgen05.ld under the hood
+# TMEM → registers for the epilogue: build a tmem copy atom, then copy
+copy_atom = tcgen05.Ld32x32bOp(tcgen05.Repetition.x32, tcgen05.Pack.NONE)
+tiled_copy_t2r = tcgen05.make_tmem_copy(copy_atom, tmem_tensor)
+cute.copy(tiled_copy_t2r, tmem_frag, reg_frag)  # lowers to tcgen05.ld
 ```
 
 ## TMA Copy Atoms
 
 ```python
-# TMA bulk copy: global → shared
-tma_copy = SM100_TMA_LOAD_2D
+# TMA bulk-tensor copy operation: global → shared.
+# Use CopyBulkTensorTileG2SOp() when the tile is not multicast, or the
+# multicast variant when one tile is broadcast to the CTAs of a cluster.
+op = cute.nvgpu.cpasync.CopyBulkTensorTileG2SMulticastOp(tcgen05.CtaGroup.ONE)
 
-# Setup TMA descriptor
-tma_desc = make_tma_copy(
-    tma_copy,
-    global_tensor,
-    smem_layout,
-    tile_shape,
-    cluster_shape
+# Build the TMA atom for operand A against the tiled MMA partitioning
+tma_atom_a, a_tma_tensor = cute.nvgpu.make_tiled_tma_atom_A(
+    op,
+    a,                       # global tensor
+    a_smem_layout_slice,     # shared-memory layout of one stage
+    mma_tiler_mnk,
+    tiled_mma,
+    cluster_layout_vmnk.shape,
 )
 ```
 

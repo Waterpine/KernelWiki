@@ -22,24 +22,31 @@ sources:
 - doc-nvidia-tuning-guide
 - blog-tcgen05-tutorial
 - blog-colfax-cutlass
-blackwell_relevance: Blackwell uses 16-warp single-thread MMA model (vs Hopper's 4-warp
-  warp-group); fundamentally different structure.
+blackwell_relevance: Blackwell issues tcgen05.mma from a single thread, so one warp
+  suffices for MMA and the remaining warps take producer, scheduler and epilogue roles
+  (vs Hopper's 4-warp warpgroup collectively issuing wgmma). The CTA warp count is a
+  kernel design choice, not an architectural one - CUTLASS 4.5.0's SM100 warp-specialized
+  GEMM uses 8 warps (256 threads).
 artifact_dir: artifacts/kernels/warp-specialization
 ---
 
 ## Overview
 
-Warp specialization assigns distinct functional roles to warps within a CTA, allowing each warp to focus on a single pipeline stage (data loading, MMA computation, or epilogue writeback). On Blackwell (SM100), the 16-warp CTA structure replaces Hopper's 4-warp warpgroup model. Because tcgen05.mma is a single-thread instruction that operates on TMEM rather than registers, only one warp needs to issue MMA operations, freeing the remaining warps for producer and consumer roles.
+Warp specialization assigns distinct functional roles to warps within a CTA, allowing each warp to focus on a single pipeline stage (data loading, MMA computation, or epilogue writeback). On Blackwell (SM100), the MMA is no longer tied to a 4-warp warpgroup as it is on Hopper; the CTA's warp count and role split are chosen by the kernel (CUTLASS 4.5.0's SM100 warp-specialized GEMM uses 8 warps / 256 threads; NVIDIA's CuTe-DSL tutorial uses 6 warps / 192 threads). Because tcgen05.mma is a single-thread instruction that operates on TMEM rather than registers, only one warp needs to issue MMA operations, freeing the remaining warps for producer and consumer roles.
 
-## Blackwell 16-Warp Kernel Structure
+## Blackwell Warp Role Structure
 
-The canonical Blackwell GEMM kernel uses 16 warps (512 threads) per CTA with the following role assignment:
+CUTLASS 4.5.0's SM100 warp-specialized GEMM uses 8 warps (256 threads) per CTA, with roles assigned by `WarpCategory`:
 
 | Warp ID | Role | Responsibility |
 |---------|------|----------------|
-| 0 | TMA Producer | Issues TMA bulk-copy from global to shared memory, signals mbarrier |
-| 1 | MMA Consumer | Issues tcgen05.mma on SMEM operands, writes results to TMEM |
-| 2-15 | Epilogue | Reads TMEM accumulator, applies scale/bias/activation, writes to global memory |
+| 0 | MMA | Issues tcgen05.mma on SMEM operands, writes results to TMEM |
+| 1 | Sched | Runs the tile scheduler (CLC query loop) |
+| 2 | MainloopLoad | Issues TMA bulk-copy from global to shared memory, signals mbarrier |
+| 3 | EpilogueLoad | Loads epilogue auxiliary tensors (bias, aux) via TMA |
+| 4-7 | Epilogue | Reads TMEM accumulator, applies scale/bias/activation, writes to global memory |
+
+NVIDIA's CuTe-DSL Blackwell tutorial makes a different split with 6 warps (192 threads): warps 0-3 epilogue, warp 4 MMA, warp 5 TMA. The warp count and role split are a kernel design choice.
 
 This contrasts with Hopper where a warpgroup (4 warps, 128 threads) collectively issues wgmma.mma_async, and all threads in the warpgroup participate in the MMA. On Blackwell, the MMA warp dispatches the instruction from a single thread while the hardware handles the data movement internally.
 
@@ -49,8 +56,8 @@ This contrasts with Hopper where a warpgroup (4 warps, 128 threads) collectively
 |--------|---------------|-------------------|
 | MMA granularity | 4-warp warpgroup (128 threads) | Single thread in 1 warp |
 | MMA output destination | Registers (shared across warpgroup) | TMEM (256KB, CTA-visible) |
-| Producer warps | Separate warp(s) for TMA loads | Warp 0 dedicated to TMA |
-| Epilogue execution | Same warpgroup or separate warps | 14 dedicated warps (2-15) |
+| Producer warps | Separate warp(s) for TMA loads | Dedicated load warps (warps 2-3 in CUTLASS 4.5.0's SM100 GEMM: mainloop + epilogue aux) |
+| Epilogue execution | Same warpgroup or separate warps | Dedicated epilogue warps (4 in CUTLASS 4.5.0's SM100 GEMM) |
 | Synchronization | warpgroup barriers, arrive/wait | mbarrier pairs (producer/consumer) |
 | Register pressure | High (accumulators in registers) | Low (accumulators in TMEM) |
 
@@ -59,8 +66,8 @@ This contrasts with Hopper where a warpgroup (4 warps, 128 threads) collectively
 The kernel entry point assigns each warp its role based on `threadIdx.x`:
 
 ```cuda
-// Blackwell 16-warp specialized GEMM kernel skeleton
-// 16 warps = 512 threads per CTA
+// Blackwell warp-specialized GEMM kernel skeleton -- one possible role split
+// (this example uses 16 warps = 512 threads per CTA; CUTLASS 4.5.0 uses 8)
 __global__ void __launch_bounds__(512)
 blackwell_gemm_warp_specialized(
     const __grid_constant__ GemmParams params)
@@ -187,14 +194,15 @@ blackwell_gemm_warp_specialized(
 
 The producer-consumer synchronization uses mbarrier pairs. Each pipeline stage has two barriers:
 
-1. **data_ready**: Producer (Warp 0) arrives after TMA completes. Consumer (Warp 1) waits before issuing MMA.
+1. **data_ready**: Producer (Warp 0) performs `mbarrier.arrive.expect_tx` *before* issuing the TMA copies; the TMA engine itself performs the complete-tx that finishes the phase when the data lands. Consumer (Warp 1) waits before issuing MMA.
 2. **buffer_free**: Consumer (Warp 1) arrives after MMA consumes the data. Producer (Warp 0) waits before overwriting the buffer.
 
 At the PTX level, the mbarrier operations map to:
 
 ```ptx
-// Producer: signal data is ready in stage %stage
-mbarrier.arrive.shared.b64  %dummy, [%mbar_data_ready + %stage_offset];
+// Producer: set the expected transaction count and arrive, BEFORE issuing
+// the TMA copies. The TMA engine performs complete-tx when data lands.
+mbarrier.arrive.expect_tx.shared.b64  %dummy, [%mbar_data_ready + %stage_offset], %tx_bytes;
 
 // Consumer: wait for data to be ready
 mbarrier.try_wait.parity.shared.b64  %pred, [%mbar_data_ready + %stage_offset], %phase;
@@ -208,35 +216,26 @@ mbarrier.try_wait.parity.shared.b64  %pred, [%mbar_buffer_free + %stage_offset],
 
 ## CUTLASS SM100 Warp Specialization
 
-In CUTLASS 4.5.0, the SM100 GEMM collective (`CollectiveMma_1SM`) implements this pattern with CuTe abstractions:
+In CUTLASS 4.5.0, `GemmUniversal` for SM100 (`sm100_gemm_tma_warpspecialized.hpp`) implements this pattern:
 
 ```cuda
-// CUTLASS SM100 warp role dispatch (simplified from CollectiveMma)
-// Template parameter WarpCount = cute::Shape<1, 1, 14>
-// Warp 0 = producer, Warp 1 = math, Warps 2-15 = epilogue
+// CUTLASS SM100 warp role dispatch (condensed from the upstream kernel)
+static constexpr uint32_t NumSchedThreads        = NumThreadsPerWarp;  // 1 warp
+static constexpr uint32_t NumMMAThreads          = NumThreadsPerWarp;  // 1 warp
+static constexpr uint32_t NumMainloopLoadThreads = NumThreadsPerWarp;  // 1 warp
+static constexpr uint32_t NumEpilogueLoadThreads = NumThreadsPerWarp;  // 1 warp
+static constexpr uint32_t NumEpilogueThreads     = CollectiveEpilogue::ThreadCount;  // 128
+static constexpr uint32_t MaxThreadsPerBlock =                          // = 256 (8 warps)
+    NumSchedThreads + NumMainloopLoadThreads + NumMMAThreads +
+    NumEpilogueLoadThreads + NumEpilogueThreads;
 
-template <class TiledMma, class SmemLayout>
-struct CollectiveMma_1SM {
-    static constexpr int NumProducerWarps = 1;
-    static constexpr int NumMathWarps = 1;
-    static constexpr int NumEpilogueWarps = 14;
-
-    CUTLASS_DEVICE void operator()(
-        Params const& params,
-        char* smem_buf,
-        TiledMma& tiled_mma)
-    {
-        int warp_idx = cutlass::canonical_warp_idx_sync();
-
-        if (warp_idx == 0) {
-            producer_warp(params, smem_buf);
-        } else if (warp_idx == 1) {
-            math_warp(params, smem_buf, tiled_mma);
-        } else {
-            epilogue_warp(params, smem_buf);
-        }
-    }
+enum class WarpCategory : int32_t {
+    MMA = 0, Sched = 1, MainloopLoad = 2, EpilogueLoad = 3, Epilogue = 4
 };
+
+int warp_idx = canonical_warp_idx_sync();
+WarpCategory warp_category = warp_idx < int(WarpCategory::Epilogue)
+                           ? WarpCategory(warp_idx) : WarpCategory::Epilogue;
 ```
 
 ## When to Use
@@ -247,7 +246,7 @@ struct CollectiveMma_1SM {
 
 ## Caveats
 
-- The 14 epilogue warps may be underutilized for simple epilogues (e.g., pure store). Complex epilogues (scale, bias, activation, quantization) benefit more.
+- Dedicating many warps to the epilogue, as this example's 14 do, may leave them underutilized for simple epilogues (e.g., pure store). Complex epilogues (scale, bias, activation, quantization) benefit more.
 - The single MMA warp means the kernel cannot overlap multiple independent MMA streams within a CTA. Use 2-SM cooperative mode for larger tiles instead.
 - mbarrier initialization must happen before any warp tries to wait; use `__syncthreads()` after init if needed.
 

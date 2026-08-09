@@ -12,7 +12,7 @@ retrieved_at: 2026-04-17
 
 ## Overview
 
-Cluster Launch Control (CLC) is a Blackwell hardware feature enabling dynamic tile scheduling for persistent GEMM kernels. Rather than static tile distribution where each thread block computes a predetermined output tile, CLC launches a grid of thread blocks and dynamically allocates work based on SM resource availability. Introduced in CUTLASS 3.8.0, CLC eliminates workload imbalance when SMs have uneven availability (e.g., partial SM allocation with Green Context or concurrent kernel execution).
+Cluster Launch Control (CLC) is a Blackwell hardware feature enabling dynamic tile scheduling for persistent GEMM kernels. Rather than static tile distribution where each thread block computes a predetermined output tile, CLC launches a grid of thread blocks and dynamically allocates work based on SM resource availability. Introduced in CUTLASS 3.8.0, CLC reduces workload imbalance when SMs have uneven availability (e.g., partial SM allocation with Green Context or concurrent kernel execution).
 
 ## Core Mechanism
 
@@ -101,7 +101,7 @@ Implements the tile scheduling logic:
 - `advance_to_next_work()`: Issues the next CLC query (producer side)
 - `get_current_work()`: Retrieves the current tile assignment (consumer side)
 - Handles grid completion detection
-- Manages stream-K decomposition for load balancing
+- Stream-K decomposition is handled by the separate `PersistentTileSchedulerSm100StreamK` class
 
 ## Integration with GEMM Kernels
 

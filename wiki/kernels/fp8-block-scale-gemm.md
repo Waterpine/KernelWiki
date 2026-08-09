@@ -78,19 +78,25 @@ __global__ void sm100_fp8_gemm_block_scale(...) {
     for (int k = 0; k < K; k += BLOCK_K) {
         mbarrier_wait(&tma_done);
 
-        // tcgen05.mma.mxf8f6f4.block_scale variant
-        // Reads A, B from SMEM; scales from scale SMEM; accumulates in TMEM
+        // tcgen05.mma.kind::mxf8f6f4.block_scale variant
+        // Reads A, B from SMEM; scale factors from TMEM; accumulates in TMEM
+        // enable-input-d is a .pred operand: build it with setp inside the block
         asm volatile(
+            "{\n\t.reg .pred p;\n\tsetp.ne.b32 p, %6, 0;\n\t"
             "tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale.scale_vec::1X "
-            "[%0], %1, %2, %3, %4, %5;"
-            :: "r"(tmem), "l"(a_desc), "l"(b_desc),
-               "r"(sf_a_desc), "r"(sf_b_desc), "n"(1)
+            "[%0], %1, %2, %3, [%4], [%5], p;\n\t}\n"
+            :: "r"(tmem), "l"(a_desc), "l"(b_desc), "r"(idesc),
+               "r"(sf_a_tmem), "r"(sf_b_tmem), "r"(1)
         );
     }
 
     // Read from TMEM, apply global scale, store
     float result = tmem_load(tmem) * global_scale;
     output[row * N + col] = __float2half(result);
+
+    // Release TMEM: every tcgen05.alloc must be matched by a tcgen05.dealloc
+    // before the kernel exits, issued by the same whole warp (.sync.aligned).
+    tmem_dealloc(tmem, 256);
 }
 ```
 

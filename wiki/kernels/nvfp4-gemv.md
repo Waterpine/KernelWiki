@@ -32,10 +32,11 @@ sources:
 performance_claims:
 - gpu: B200
   dtype: nvfp4
-  shape: M=7168, K=16384, L=1
+  shape: geometric mean over the three benchmark configs (M=7168 K=16384 L=1; M=4096
+    K=7168 L=8; M=7168 K=2048 L=4)
   metric: latency_us
-  value: 22.4
-  utilization: ~2.6x of SOL (8.6us)
+  value: 18.5
+  utilization: ~2x of SOL (geomean 8.63us)
   source_id: contest-gpumode-p1
 artifact_dir: artifacts/kernels/nvfp4-gemv
 ---
@@ -46,7 +47,7 @@ artifact_dir: artifacts/kernels/nvfp4-gemv
 
 NVFP4 Batched GEMV is a memory-bound kernel computing batched matrix-vector products with NVFP4 (E2M1) block-scaled inputs on B200 GPUs. Unlike compute-bound GEMM, GEMV is dominated by memory bandwidth utilization (each FP4 element is used only once in the dot product), making PTX-level memory access control, cache policy differentiation, and register budgeting the critical optimization levers.
 
-This was Problem 1 of the GPU Mode NVFP4 Hackathon (Nov 2025). The theoretical speed-of-light is ~8.6us for the largest config, limited by B200's 8 TB/s HBM3e bandwidth. Top performers achieved ~22.4us (2.6x off SOL), reflecting the overhead of FP4 decoding and scale factor application.
+This was Problem 1 of the GPU Mode NVFP4 Hackathon (Nov 2025). The theoretical speed-of-light is ~8.6us for the largest config, limited by B200's 8 TB/s HBM3e bandwidth. The top three solutions achieved ~18.5us geometric mean (about 2x speed of light), reflecting the overhead of FP4 decoding and scale factor application; a pure PyTorch `torch._scaled_mm` submission scored 22.4us.
 
 ## Problem Specification
 
@@ -224,7 +225,7 @@ Documented progression from Yue's hackathon blog:
 | Stage | Technique | Latency |
 |-------|-----------|---------|
 | CuTe DSL baseline | Basic CuTe partition/copy | ~100us |
-| Coalesced access | Fix memory access patterns | 443us -> 39us |
+| Coalesced access + thread collaboration | Fix memory access patterns | 2000us -> 443us |
 | Hardware intrinsics | cvt.rn.f16x2.e2m1x2 | ~39us |
 | PTX assembly | Full PTX with byte unpacking | ~27us |
 | ILP optimization | Instruction-level parallelism | ~22.9us |
@@ -234,7 +235,7 @@ Documented progression from Yue's hackathon blog:
 
 1. **Memory-bound kernels need bandwidth-first thinking**: Arithmetic optimizations have minimal impact; focus on memory access patterns, cache policies, and vectorized loads
 2. **PTX gives real control on Blackwell**: The gap between C intrinsics and hand-written PTX was substantial (443us to 27us in one journey)
-3. **Profile first**: "Run Nsight Compute to confirm memory-bound behavior" (Amandeep's lesson after 12 attempts)
+3. **Profile first**: "The single most important thing I could have done after attempt 7 was run Nsight Compute and confirm the kernel was memory-bound." (Amandeep, after twelve attempts)
 4. **Register budgeting matters**: Lower registers -> higher occupancy -> better memory latency hiding
 5. **TMEM is irrelevant**: Memory-bound kernels do not benefit from TMEM (it helps compute-bound only)
 

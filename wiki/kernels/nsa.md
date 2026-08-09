@@ -11,7 +11,7 @@ languages: [triton]
 related: [kernel-flashmla, technique-pipeline-stages]
 sources: [blog-nsa, blog-flashmla, blog-vllm-deepseek-v3-sparse]
 performance_claims:
-  - gpu: H100
+  - gpu: A100
     dtype: bf16
     shape: "seqlen=65536"
     metric: speedup
@@ -176,7 +176,7 @@ NSA's sparsity pattern is explicitly designed for GPU memory access efficiency:
 |----------------|-----------------|-------------------|-------------------|
 | 64K | 9.0x | 6.0x | 11.6x |
 
-All speedups measured against FlashAttention-2 on H100 with BF16 precision.
+All speedups measured against FlashAttention-2 on an 8-GPU A100 system with BF16 precision.
 
 ## When to Use
 

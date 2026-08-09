@@ -89,7 +89,7 @@ blockscale_offsets[expert_id + 1] = (expert_offsets[expert_id + 1] + 127) / 128 
 
 ### 3. Adaptive Grid Sizing for Small Batches
 
-At batch size 1, B200's 142 SMs are 99.3% underutilized with fixed block sizing. SGLang dynamically halves block size and doubles grid size until SM occupancy is maximized:
+At batch size 1, the B200's SMs are 99.3% underutilized with fixed block sizing. (The article computes this from a figure of 142 SMs; a full B200 exposes 148.) SGLang dynamically halves block size and doubles grid size until SM occupancy is maximized:
 ```
 Initial:     grid=128, block=360
 Iteration 1: grid=256, block=180

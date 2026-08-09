@@ -23,7 +23,7 @@ The tcgen05-tutorial demonstrates the performance impact of pipelining:
 ```
 No pipelining (load, then compute):    695 TFLOPS  (46%)
 3-stage pipeline (TMA + MMA overlap):  940 TFLOPS  (62%)
-+ warp specialization:                1476 TFLOPS  (98%)
++ warp specialization:                1209 TFLOPS  (80%)
 ```
 
 The 35% improvement from pipelining alone (695 to 940 TFLOPS) comes from hiding global memory latency behind MMA computation.
@@ -196,7 +196,7 @@ constexpr int TILE_K = 64;
 
 ## When to Use
 
-- **All memory-bound and compute-bound GEMM kernels**: Pipelining is never harmful and always improves utilization by hiding latency.
+- **Memory-bound and compute-bound GEMM kernels with enough K-iterations to fill the pipeline**: pipelining hides load latency behind compute. The win shrinks as the iteration count approaches the stage count, and prologue/epilogue overhead may dominate for very short K (see Caveats).
 - **Attention kernels**: The K-dimension loop in attention benefits from pipelining the KV tile loads.
 - **Combined with warp specialization**: Pipelining provides the buffer structure; warp specialization assigns the producer/consumer roles. The two techniques are complementary and almost always used together.
 

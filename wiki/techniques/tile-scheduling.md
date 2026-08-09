@@ -9,7 +9,7 @@ reproducibility: snippet
 prerequisites: [hw-clc]
 related: [hw-clc, technique-persistent-kernels, pattern-low-sm-utilization]
 sources: [doc-nvidia-tuning-guide, doc-cutlass-blackwell, pr-cutlass-2161]
-blackwell_relevance: "CLC (SM100-only) replaces static scheduling; Hopper patterns provide baseline comparison."
+blackwell_relevance: "CLC (sm_100 and higher, including SM120) replaces static scheduling; Hopper patterns provide baseline comparison."
 ---
 
 ## Overview
@@ -123,30 +123,30 @@ __device__ void clc_init_scheduler(
 CUTLASS provides several tile schedulers that abstract these strategies:
 
 ```cuda
-// CUTLASS tile scheduler selection for SM100
-// All persistent schedulers inherit from PersistentTileSchedulerSm100
+// CUTLASS tile scheduler selection for SM100.
+// Users name a tag type in `cutlass::gemm`; `TileSchedulerSelector` maps it
+// to one of three sibling implementations in `cutlass::gemm::kernel::detail`.
 
-// 1. Default CLC scheduler with swizzled raster
-using Scheduler_Default = cutlass::gemm::PersistentTileSchedulerSm100;
+// 1. Default CLC scheduler -> detail::PersistentTileSchedulerSm100
+using Scheduler_Default = cutlass::gemm::PersistentScheduler;
 
-// 2. Stream-K scheduler for better tail handling
+// 2. Stream-K scheduler   -> detail::PersistentTileSchedulerSm100StreamK
 //    Splits K-dimension across CTAs for the last wave
-using Scheduler_StreamK = cutlass::gemm::StreamKSchedulerSm100;
+using Scheduler_StreamK = cutlass::gemm::StreamKScheduler;
 
-// 3. Grouped GEMM scheduler for MoE workloads
+// 3. Grouped GEMM scheduler -> detail::PersistentTileSchedulerSm100Group
 //    Each group has different M, shared N and K
-using Scheduler_Grouped = cutlass::gemm::GroupedTileSchedulerSm100;
+using Scheduler_Grouped = cutlass::gemm::GroupScheduler;
 
-// Usage in CUTLASS kernel definition:
+// Usage in CUTLASS kernel definition. GemmUniversal takes the problem
+// shape, the two collectives and the scheduler tag; element types,
+// layouts, tile shape and TiledMma are baked into the collectives by
+// their builders, not passed here.
 using GemmKernel = cutlass::gemm::kernel::GemmUniversal<
-    cute::Shape<Int<128>, Int<256>, Int<64>>,   // Tile shape
-    ElementA, LayoutA,
-    ElementB, LayoutB,
-    ElementC, LayoutC,
-    TiledMma,
+    cute::Shape<int, int, int, int>,             // ProblemShape <M,N,K,L>
     CollectiveMainloop,
     CollectiveEpilogue,
-    Scheduler_Default                            // Tile scheduler
+    Scheduler_Default                            // Tile scheduler tag
 >;
 ```
 
@@ -158,22 +158,31 @@ The choice of scheduling strategy directly impacts L2 cache hit rates. On B200 w
 # L2 cache reuse analysis for different schedulers
 # Problem: M=8192, N=8192, K=4096, BF16
 # Tile: 128x256, giving 64x32 = 2048 tiles
-# B200: 142 SMs, 126 MB L2
+# B200: 148 SMs, 126 MB L2
 
 tile_bytes_A = 128 * 4096 * 2  # 1 MB per tile row of A
 tile_bytes_B = 4096 * 256 * 2  # 2 MB per tile column of B
 
-# Linear raster: first wave loads 142 tiles across 142/32 = 4.4 column groups
-# B data for 5 different column groups = 5 * 2 MB = 10 MB (fits in L2)
-# But A data for 142/32 = 4.4 row groups * 4.4 col groups = ~20 distinct A rows
-# 20 * 1 MB = 20 MB -> some L2 eviction
+# Linear raster (row-major, tile_m = idx / 32): the first wave of 148 tiles
+# spans ceil(148/32) = 5 A row-blocks and ALL 32 B column-blocks.
+#   A footprint: 5 * 1 MB  =  5 MB
+#   B footprint: 32 * 2 MB = 64 MB
+#   total       = 69 MB
+# Each A row-block is reused by 32 consecutive tiles, but a B column-block is
+# only reused once per full row-pass, so all 64 MB of B must stay resident to
+# get any B reuse at all.
 
-# Swizzled raster (swizzle=4): first wave covers 142 tiles in ~36 groups of 4
-# Each group uses 1 A row + 4 B columns = 1 + 8 = 9 MB per group
-# But groups share A rows: total unique A = ~36 rows * 1 MB = 36 MB
-# L2 pressure: 36 MB + 8 MB = 44 MB (fits in B200's 126 MB L2)
+# Swizzled raster (swizzle=4): the first wave snakes down 4-wide column groups,
+# covering 4 B columns x ~37 A rows.
+#   A footprint: 37 * 1 MB =  37 MB
+#   B footprint: 4 * 2 MB  =   8 MB
+#   total       = 45 MB (fits in B200's 126 MB L2 with room to spare)
+# Now the reused operand is the small one: 8 MB of B is hit by all 37 rows,
+# and each A row-block is reused across 4 tiles.
 
-# Conclusion: swizzled raster reduces L2 misses by ~2x vs linear for large problems
+# Conclusion: swizzled raster shrinks the first-wave footprint (69 MB -> 45 MB)
+# and, more importantly, makes the heavily-reused operand small enough to stay
+# resident -- the reason it beats linear raster on large problems.
 ```
 
 ## Tail Effect Mitigation
@@ -184,13 +193,13 @@ The "tail effect" occurs when the last wave of tiles does not fully occupy all S
 |-----------|---------------|---------------------------|
 | Linear raster | None | `(total_tiles % num_SMs) / num_SMs` |
 | Static stride | None | Same as linear |
-| CLC dynamic | Automatic | Fast CTAs steal from slow ones |
+| CLC dynamic | Automatic | Workers that finish early take over not-yet-launched clusters |
 | Stream-K | K-splitting | Near 100% (splits partial tiles across SMs) |
 
-For a problem with 150 tiles on 142 SMs:
-- Static: last wave has 8 tiles on 8 SMs, 134 SMs idle (5.6% utilization)
-- CLC: fast-finishing CTAs from wave 1 absorb the 8 extra tiles
-- Stream-K: the 8 remaining tiles are split across all 142 SMs
+For a problem with 150 tiles on 148 SMs:
+- Static: last wave has 2 tiles on 2 SMs, 146 SMs idle (1.4% utilization)
+- CLC: the 2 extra coordinates are cancelled and absorbed by whichever workers finish first, without a second prologue. `try_cancel` can only cancel a cluster that has **not started running**; it cannot take work away from a slow CTA that is already executing.
+- Stream-K: the 2 remaining tiles are split across all 148 SMs
 
 ## When to Use
 

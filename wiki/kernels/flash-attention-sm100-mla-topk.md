@@ -34,9 +34,9 @@ sources:
 performance_claims:
 - gpu: B200
   dtype: bf16
-  shape: batch=512, seqlen_q=1, seqlen_k=16384, nheads=128, topk=2048
+  shape: batch=512, seqlen_q=1, seqlen_k=16384, nheads=128, topk=2048, DSA without bitmask
   metric: latency_ms
-  value: 0.3
+  value: 0.31
   source_id: pr-flash-attention-2441
 blackwell_relevance: PR-grade CuTe DSL SM100 MLA code is directly relevant to DSA sparse attention and top-k KV-gather routing on B200.
 ---

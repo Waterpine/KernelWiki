@@ -3,8 +3,8 @@ id: doc-tfla
 title: "Tiled Flash Linear Attention (TFLA)"
 url: https://arxiv.org/abs/2503.14376
 source_category: paper
-architectures: [sm100, sm90]
-tags: [linear-attention, gated-delta-net, chunk-parallelism, tcgen05, wgmma]
+architectures: [sm90]
+tags: [linear-attention, chunk-parallelism, triton]
 retrieved_at: 2026-04-16
 ---
 
@@ -15,5 +15,5 @@ Paper on Tiled Flash Linear Attention enabling arbitrarily large chunk sizes for
 ## Key Techniques
 - Two levels of sequence parallelism: standard chunkwise + tiling within chunks
 - Prevents materialization of intermediate memory states
-- Matmuls emitted as inline PTX: WGMMA on Hopper, tcgen05 on Blackwell
-- Improves arithmetic intensity for linear attention variants including GatedDeltaNet
+- Kernels are written in Triton 3.1.0; the paper leaves a CUDA implementation to future work
+- Improves arithmetic intensity for linear RNNs; applied in the paper to the mLSTM (xLSTM with matrix memory) and to an mLSTM variant with a sigmoid input gate

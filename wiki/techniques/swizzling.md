@@ -8,19 +8,19 @@ confidence: source-reported
 reproducibility: snippet
 prerequisites: [hw-tma]
 related: [hw-tma, technique-pipeline-stages, pattern-memory-bound]
-sources: [doc-nvidia-tuning-guide, blog-tcgen05-tutorial, blog-modular-blackwell]
-blackwell_relevance: "128-byte swizzling mandatory for Blackwell tcgen05 inputs; same concept on Hopper but less critical."
+sources: [doc-nvidia-tuning-guide, doc-ptx-isa-sm100, blog-tcgen05-tutorial, blog-modular-blackwell]
+blackwell_relevance: "tcgen05 reads the swizzle mode from the shared memory descriptor; several modes are valid, and 128-byte swizzling is the usual choice for K-major 16-bit operands. Same concept on Hopper."
 ---
 
 ## Overview
 
-Shared memory swizzling remaps the linear address layout of a matrix tile in SMEM so that threads accessing consecutive columns (or rows) hit different 32-byte banks rather than the same bank. This eliminates bank conflicts that would otherwise serialize concurrent accesses. On Blackwell (SM100), 128-byte swizzling is mandatory for TMA loads and tcgen05.mma operands. Without it, performance drops to 46% of the achievable throughput for GEMM workloads.
+Shared memory swizzling remaps the linear address layout of a matrix tile in SMEM so that threads accessing consecutive columns (or rows) hit different 32-byte banks rather than the same bank. This eliminates bank conflicts that would otherwise serialize concurrent accesses. On Blackwell (SM100), tcgen05.mma accepts several swizzling modes and reads the chosen mode from the shared memory descriptor; 128-byte swizzling is the usual choice for K-major 16-bit operands. In the tcgen05-tutorial GEMM it raised throughput from 255 TFLOPS (17% of cuBLAS) to 695 TFLOPS (46% of cuBLAS).
 
-## Why 128-Byte Swizzling is Mandatory on Blackwell
+## Why 128-Byte Swizzling Is the Usual Choice on Blackwell
 
 Shared memory has 32 banks, each 4 bytes wide (128 bytes total per bank cycle). When a warp accesses a matrix stored in row-major layout, threads in the same warp reading elements from consecutive rows in the same column hit the same bank, causing a 32-way bank conflict.
 
-The TMA unit on both Hopper and Blackwell encodes the swizzle pattern as part of the tensor descriptor. The tcgen05.mma instruction expects its SMEM operands to already be swizzled in the 128-byte pattern. Using unswizzled data produces incorrect MMA results.
+The TMA unit on both Hopper and Blackwell encodes the swizzle pattern as part of the tensor descriptor. `tcgen05.mma` reads the mode it should assume from bits 61-63 of the shared memory descriptor: all modes are valid for K-major operands, MN-major 8/16-bit operands may use anything except 128-byte-with-32-byte-atomicity, and MN-major 32-bit operands must use that mode. Data whose actual layout disagrees with the mode in the descriptor produces incorrect MMA results.
 
 The tcgen05-tutorial benchmark progression shows the impact:
 
@@ -114,15 +114,15 @@ In CuTe/CUTLASS, swizzle is expressed as a layout composition:
 
 ```cuda
 // CuTe swizzle layout for 128-byte swizzle pattern
-// Swizzle<B, M, S> where:
-//   B = number of bits in the base (non-swizzled) portion
-//   M = number of bits in the mask
-//   S = shift amount
+// Swizzle<BBits, MBase, SShift> where:
+//   BBits  = number of bits in the swizzle mask
+//   MBase  = number of least-significant bits kept constant
+//   SShift = distance to shift the mask
 //
 // Swizzle<3, 4, 3> encodes the 128B swizzle:
-//   3 base bits (8-byte alignment)
-//   4 mask bits (16 rows)
-//   3 shift bits (8-column groups)
+//   3 mask bits  -> 8 distinct XOR patterns
+//   4 base bits  -> 16-byte granularity kept constant
+//   shift of 3   -> 8 * 16 B = 128 B repeating pattern
 
 using SmemLayoutAtom = decltype(
     composition(
@@ -155,7 +155,7 @@ Use `nvprof` or Nsight Compute to verify that swizzling eliminates conflicts:
 
 ## When to Use
 
-- **All Blackwell tensor core kernels**: 128-byte swizzling is not optional. Both TMA and tcgen05.mma require it for correct results and peak performance.
+- **All Blackwell tensor core kernels**: pick a swizzling mode the operand's major-ness and type-size allow, encode the same mode in the TMA descriptor and in the shared memory descriptor, and prefer 128-byte swizzling for K-major 16-bit operands.
 - **Hopper wgmma kernels**: Same requirement applies; wgmma expects swizzled SMEM operands.
 - **Non-MMA shared memory access**: If multiple warps access the same SMEM tile in a column pattern (e.g., reduction), swizzling prevents serialization.
 

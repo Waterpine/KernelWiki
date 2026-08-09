@@ -1,6 +1,6 @@
 ---
 id: doc-flash-attention-4
-title: "FlashAttention-4: Hardware-Friendly Attention on Blackwell"
+title: "FlashAttention-4: Algorithm and Kernel Pipelining Co-Design for Asymmetric Hardware Scaling"
 url: https://arxiv.org/abs/2603.05451
 source_category: paper
 architectures: [sm100]
@@ -28,6 +28,6 @@ FlashAttention-4 paper — algorithm-kernel co-design for Blackwell's asymmetric
 - Written in CuTe-DSL (Python), 20-30x faster compilation than C++ templates
 
 ## Performance
-- Up to 1605 TFLOPS on B200 BF16 (71% utilization)
+- Up to 1613 TFLOPS on B200 BF16 (71% utilization)
 - 1.1-1.3x over cuDNN 9.13
 - 2.1-2.7x over Triton

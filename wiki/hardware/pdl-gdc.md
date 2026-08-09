@@ -8,7 +8,7 @@ confidence: source-reported
 related: [technique-persistent-kernels, hw-clc]
 sources: [doc-nvidia-tuning-guide, pr-cutlass-2161, doc-cutlass-changelog-sm100]
 aliases: [PDL, GDC, "programmatic dependent launch", "grid dependency control"]
-blackwell_relevance: "PDL available on Hopper but enabled by default on Blackwell SM100."
+blackwell_relevance: "PDL is available from compute capability 9.0 (Hopper) onward, including Blackwell SM100. It is opt-in per launch on every architecture: the secondary kernel must be launched with cudaLaunchAttributeProgrammaticStreamSerialization via cudaLaunchKernelEx."
 ---
 
 ## Overview
@@ -22,20 +22,24 @@ PDL/GDC allows overlapping execution of dependent kernel launches. The primary k
 cudaGridDependencySynchronize();  // or PTX equivalent
 
 // Secondary kernel can start overlapping with primary's tail
-// Enabled by default on SM100 (opt-in on SM90)
+// Opt-in on every architecture: launch the secondary kernel with
+// cudaLaunchAttributeProgrammaticStreamSerialization (cudaLaunchKernelEx)
 ```
 
-## Blackwell Default Behavior
+## Behavior on Blackwell
 
-On SM100, PDL is **enabled by default** — no opt-in needed. This means:
-- Back-to-back kernel launches naturally overlap
-- Memory fences ensure correctness for dependent data
-- Reduces kernel launch gaps in compute-heavy pipelines
+SM100 supports PDL, but it is still opt-in per launch. This means:
+- Back-to-back kernel launches overlap only when the secondary kernel is
+  launched with `cudaLaunchAttributeProgrammaticStreamSerialization`
+- The secondary kernel must call `cudaGridDependencySynchronize()` (or use
+  another mechanism) before reading the primary kernel's results
+- Overlap is opportunistic: the CUDA Programming Guide states the behaviour
+  "is opportunistic and not guaranteed to lead to concurrent kernel execution"
 
 ## When It Matters
 - Chains of small kernels (e.g., MoE dispatch → compute → combine)
 - Pipeline-parallel training with many sequential kernel launches
-- Reduces overall wall-clock time without code changes on Blackwell
+- Reduces overall wall-clock time, but requires code changes: the trigger call in the primary kernel, `cudaGridDependencySynchronize()` in the secondary, and the launch attribute on the secondary launch
 
 ## Related
 - [persistent-kernels](../techniques/persistent-kernels.md) — Alternative approach to reducing launch overhead

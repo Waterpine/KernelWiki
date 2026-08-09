@@ -20,9 +20,11 @@ PTX ISA 8.7+ introduces SM100-specific instructions for Blackwell's tensor core 
 
 ```asm
 tcgen05.mma.cta_group::{1|2}.kind::{dtype}
-    [tmem_addr],        // Destination: TMEM address
-    [smem_desc_a],      // Source A: SMEM descriptor
-    [smem_desc_b];      // Source B: SMEM descriptor
+    [tmem_addr],        // d-tmem: destination TMEM address
+    smem_desc_a,        // a-desc: SMEM matrix descriptor (or [a-tmem])
+    smem_desc_b,        // b-desc: SMEM matrix descriptor
+    idesc,              // 32-bit instruction descriptor
+    enable_input_d;     // predicate: D = A*B + D vs D = A*B
 ```
 
 ### CTA Group Variants
@@ -40,7 +42,7 @@ tcgen05.mma.cta_group::{1|2}.kind::{dtype}
 | `kind::tf32` | TF32 | TF32 | FP32 | m128n256k8 |
 | `kind::i8` | INT8 | INT8 | INT32 | m128n256k32 |
 | `kind::f8f6f4` | FP8/FP6/FP4 | FP8/FP6/FP4 | FP32 | m128n256k32+ |
-| `kind::mxf8` | MX FP8 | MX FP8 | FP32 | m128n256k32 |
+| `kind::mxf8f6f4` | MX FP8/FP6/FP4 | MX FP8/FP6/FP4 | FP32 | m128n256k32 |
 | `kind::mxf4nvf4` | NVFP4 | NVFP4 | FP32 | m128n256k64 |
 
 ### Key Differences from Hopper wgmma
@@ -54,9 +56,11 @@ wgmma.mma_async.sync.aligned.m64n256k16.f32.bf16.bf16
 
 // Blackwell (SM100): single-thread, TMEM accumulators
 tcgen05.mma.cta_group::1.kind::f16
-    [tmem_addr],    // TMEM accumulator (no register pressure)
-    [smem_desc_a],
-    [smem_desc_b];
+    [tmem_addr],            // TMEM accumulator (no register pressure)
+    desc_a, desc_b,         // 64-bit SMEM matrix descriptors (registers)
+    idesc,                  // 32-bit instruction descriptor
+    {m0, m1, m2, m3},       // disable-output-lane vector (4 for cta_group::1)
+    p;                      // enable-input-d predicate
 ```
 
 ## TMEM Instructions
@@ -64,21 +68,24 @@ tcgen05.mma.cta_group::1.kind::f16
 ### Allocation and Deallocation
 
 ```asm
-// Allocate TMEM rows for a CTA group
-tcgen05.alloc.cta_group::1 [tmem_base], num_rows;
+// Allocate TMEM columns for a CTA group (unit of allocation is 32 columns,
+// count must be a power of 2 in [32, 512]); one warp must issue it
+tcgen05.alloc.cta_group::1.sync.aligned.shared::cta.b32 [smem_dst], num_cols;
 
-// Deallocate TMEM rows
-tcgen05.dealloc.cta_group::1 [tmem_base], num_rows;
+// Deallocate TMEM columns
+tcgen05.dealloc.cta_group::1.sync.aligned.b32 tmem_addr, num_cols;
 ```
 
 ### Load/Store (TMEM <-> Registers)
 
 ```asm
-// Load from TMEM to registers (for epilogue)
-tcgen05.ld.16x256b [reg_dest], [tmem_src];
+// Load from TMEM to registers (for epilogue). The register-vector width comes
+// from Table 52: .16x256b with .x1 is 4 registers (.16x128b is 2, .16x64b /
+// .32x32b / .16x32bx2 are 1), and doubles with each step of .num.
+tcgen05.ld.sync.aligned.16x256b.x1.b32 {r0, r1, r2, r3}, [tmem_src];
 
-// Store from registers to TMEM
-tcgen05.st.16x256b [tmem_dest], [reg_src];
+// Store from registers to TMEM (same width rule)
+tcgen05.st.sync.aligned.16x256b.x1.b32 [tmem_dst], {r0, r1, r2, r3};
 ```
 
 ### TMEM Layout
@@ -96,16 +103,20 @@ Column mapping: determined by MMA instruction variant
 ### Dynamic Tile Scheduling
 
 ```asm
-// Signal tile arrival (producer done loading data)
-clc.arrive.group::1;
+// Request cancellation of a not-yet-launched cluster (asynchronous;
+// the 16-byte response lands at [addr] and completion signals [mbar])
+clusterlaunchcontrol.try_cancel.async.shared::cta.mbarrier::complete_tx::bytes.b128 [addr], [mbar];
 
-// Wait for tile assignment (consumer waits for work)
-clc.wait.group::1;
+// After waiting on [mbar], load and interpret the response
+ld.shared.b128 handle, [addr];
+clusterlaunchcontrol.query_cancel.is_canceled.pred.b128 p, handle;
+@p clusterlaunchcontrol.query_cancel.get_first_ctaid.v4.b32.b128 {x, y, z, _}, handle;
 
 // CLC replaces manual tile queues:
 // - Hardware maintains work queue
 // - Tiles assigned to SMs as they become available
-// - Eliminates tail effects and load imbalance
+// - Shortens the tail and rebalances work: a canceled cluster's ctaid is
+//   handed to the requesting CTA; a tile itself is never subdivided
 ```
 
 ## TMA Instructions (SM100 Enhanced)
@@ -114,11 +125,11 @@ clc.wait.group::1;
 
 ```asm
 // TMA load: global -> shared memory
-cp.async.bulk.tensor.2d.dst_shared::cta.src_global.tile.mbarrier::complete_tx::bytes
+cp.async.bulk.tensor.2d.shared::cta.global.tile.mbarrier::complete_tx::bytes
     [smem_addr], [tma_desc, {coord_x, coord_y}], [mbarrier];
 
 // TMA store: shared memory -> global
-cp.async.bulk.tensor.2d.dst_global.src_shared::cta.tile
+cp.async.bulk.tensor.2d.global.shared::cta.tile.bulk_group
     [tma_desc, {coord_x, coord_y}], [smem_addr];
 ```
 
@@ -126,23 +137,24 @@ cp.async.bulk.tensor.2d.dst_global.src_shared::cta.tile
 
 ```asm
 // Multicast TMA load to multiple CTAs in cluster
-cp.async.bulk.tensor.2d.dst_shared::cluster.src_global.tile.mbarrier::complete_tx::bytes
+cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes.multicast::cluster
     [smem_addr], [tma_desc, {coord_x, coord_y}], [mbarrier], multicast_mask;
 ```
 
 ### Alignment Requirements
 
-- TMA descriptors: 128-byte aligned base address
+- `CUtensorMap` object: 64-byte aligned
+- Global memory base address (`globalAddress`): 16-byte aligned (32-byte for
+  `CU_TENSOR_MAP_INTERLEAVE_32B` and for the `16U6_ALIGN16B` / `16U4_ALIGN16B` types)
 - Shared memory buffers: 128-byte aligned for TMA targets
-- Global memory source: 128-byte aligned
 
 ## FP4/FP8 Conversion Instructions
 
 ### FP4 (E2M1) Conversions
 
 ```asm
-// Pack two FP16 values into FP4x2
-cvt.rn.e2m1x2.f16x2 %fp4_packed, %f16x2_val;
+// Pack two FP16 values into FP4x2 (.satfinite is mandatory)
+cvt.rn.satfinite.e2m1x2.f16x2 %fp4_packed, %f16x2_val;
 
 // Unpack FP4x2 to two FP16 values
 cvt.rn.f16x2.e2m1x2 %f16x2_result, %fp4_packed;
@@ -160,14 +172,14 @@ mov.b32 {tmp0, tmp1, tmp2, tmp3}, %packed_word;
 ### FP8 Conversions
 
 ```asm
-// FP8 E4M3 to FP16
-cvt.rn.f16.e4m3 %f16_result, %fp8_val;
+// FP8 E4M3 to FP16 (packed pair)
+cvt.rn.f16x2.e4m3x2 %f16x2_result, %fp8x2_val;
 
-// FP16 to FP8 E4M3
-cvt.rn.e4m3.f16 %fp8_result, %f16_val;
+// FP16 to FP8 E4M3 (packed pair, .satfinite is mandatory)
+cvt.rn.satfinite.e4m3x2.f16x2 %fp8x2_result, %f16x2_val;
 
-// FP8 E5M2 conversions (similar syntax)
-cvt.rn.f16.e5m2 %f16_result, %fp8_val;
+// FP8 E5M2 conversions (same packed-pair forms)
+cvt.rn.f16x2.e5m2x2 %f16x2_result, %fp8x2_val;
 ```
 
 ## Cache Control Instructions

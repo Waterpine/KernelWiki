@@ -45,11 +45,11 @@ Nsight Compute shows TMA or tcgen05 units idle despite nominally compute-bound w
 
 ## Example Progression (tcgen05 tutorial)
 
-- 1-stage: 62% of cuBLAS (TMA blocks MMA)
-- 3-stage pipelined: 70% (hide most TMA latency)
-- Warp specialized: 80% (no role switching)
-- Add 2-SM MMA: 86% (larger tile, more reuse)
-- Persistent + CLC: 98% (eliminate tail effect)
+- No pipelining (v2b): 46% of cuBLAS (TMA blocks MMA)
+- 3-stage pipelined (v3): 62% (hide most TMA latency)
+- Warp specialized (v4): 80% (no role switching)
+- Add 2-SM MMA (v5): 86% (larger tile, more reuse)
+- Persistent, static scheduling (v6): 98% (CLC was not used in the tutorial)
 
 ## Caveats
 

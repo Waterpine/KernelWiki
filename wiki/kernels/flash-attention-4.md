@@ -34,7 +34,7 @@ performance_claims:
   metric: TFLOPS
   value: 1605
   utilization: 71%
-  source_id: doc-flash-attention-4
+  source_id: blog-flash-attention-4
 artifact_dir: artifacts/kernels/flash-attention-4
 ---
 
@@ -85,7 +85,7 @@ def flash_attention_4_fwd(Q, K, V, O, L):
 
 ### Software-Emulated Exponential (Cody-Waite)
 
-The SFU `ex2` instruction is the bottleneck on Blackwell -- its throughput does not scale with the doubled tensor core rate. FA4 replaces it with a software exponential distributed across FMA units using Cody-Waite range reduction and Horner polynomial evaluation.
+The SFU `ex2` instruction is the bottleneck on Blackwell -- its throughput does not scale with the doubled tensor core rate. FA4 supplements it with a software exponential distributed across FMA units using Cody-Waite range reduction and Horner polynomial evaluation.
 
 ```python
 # Software exp2 via Cody-Waite range reduction + Horner polynomial

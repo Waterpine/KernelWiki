@@ -12,7 +12,7 @@ files:
   mode: extracted
   upstream_path: inline-in-blog-markdown
   heading_path: '## Key Code > ### Basic tcgen05.mma kernel (17% of peak)'
-  sha256: 028acc063243a5ddc88f364fc27a8afd3c06ccf507bfdf90e95f71fab9b044fd
+  sha256: 3f96a2aa7aa2a8a053c4c50dff1cc202738e0ae00937ca8fdbc8dd1c2b076a80
 - local_path: 02-128b-swizzling-46-of-peak.cu
   role: extracted-block
   mode: extracted

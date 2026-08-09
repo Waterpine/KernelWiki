@@ -32,9 +32,10 @@ The official JAX Pallas tutorial for writing high-performance matrix multiplicat
 In Pallas (Mosaic GPU), one Pallas "thread" corresponds to one CUDA warpgroup (128 CUDA threads/lanes). Kernels are written in Python using JAX primitives, and the compiler handles lowering to GPU instructions.
 
 Key abstractions:
-- `ct.bid(0)` for block identifiers
-- `ct.load()` / `ct.store()` for data movement
-- Scratch shapes for shared memory and accumulator allocation
+- `plgpu.kernel(...)` with an explicit `grid` over output tiles
+- `plgpu` memory-transform helpers (`find_swizzle`, `TilingTransform`,
+  `SwizzleTransform`) and `plgpu.emit_pipeline` for the TMA pipeline
+- Scratch shapes for shared memory and TMEM accumulator allocation
 - Barrier objects for synchronization between pipeline stages
 
 ## Optimization Stages

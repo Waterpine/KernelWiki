@@ -7,8 +7,8 @@ files:
 - local_path: code/01-software-exp-cody-waite-horner.cu
   heading_path: '## Key Code > ### Software exp (Cody-Waite + Horner)'
   fence_lang: cuda
-  sha256: 6fba9c537831bba7b175ee3a050e3adb5ddf99193dee550b7122a4663e3f9164
+  sha256: 678b46bc1ac6828d784ba1f66b07d30c4c62056c13dacd19e68219d51d3a8f65
 - local_path: code/02-2-cta-cooperative-backward.cu
   heading_path: '## Key Code > ### 2-CTA cooperative backward'
   fence_lang: cuda
-  sha256: e089feff40c10ebf42fa1ff878f775c21f4f044fc4b6f2f510b43c2666c7e219
+  sha256: 0e6a6049d7927bf4a25f2a088120235a7a78932a01fc5d6af081823253485ac9

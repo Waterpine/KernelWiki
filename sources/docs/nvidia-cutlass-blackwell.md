@@ -33,16 +33,17 @@ CUTLASS provides several optimized kernel schedules for SM100:
 
 ```cpp
 // Standard 1-SM warp-specialized GEMM
-cutlass::gemm::KernelTmaWarpSpecialized1Sm
+cutlass::gemm::KernelTmaWarpSpecialized1SmSm100
 
 // 2-SM cooperative GEMM (doubled M tile)
-cutlass::gemm::KernelTmaWarpSpecialized2Sm
+cutlass::gemm::KernelTmaWarpSpecialized2SmSm100
 
 // NVFP4 specialized (block-scale aware)
 cutlass::gemm::KernelPtrArrayTmaWarpSpecialized1SmNvf4Sm100
 
-// Persistent kernel with CLC scheduling
-cutlass::gemm::KernelTmaWarpSpecializedPersistent1Sm
+// CLC scheduling is selected through the tile-scheduler tag, not a
+// separate kernel schedule:
+cutlass::gemm::PersistentScheduler
 ```
 
 ### CuTe SM100 Atoms
@@ -52,13 +53,15 @@ New CuTe atoms for Blackwell hardware:
 ```cpp
 // tcgen05 MMA atom
 using MMA = decltype(make_tiled_mma(
-    SM100_MMA_SS_128x256x16_BF16_RS{},  // MMA atom: SMEM x SMEM -> TMEM
+    SM100_MMA_F16BF16_SS<TypeA, TypeB, TypeC,   // A, B and accumulator types
+                         128, 256,              // MMA M and N dimensions
+                         UMMA::Major::K, UMMA::Major::K>{},  // A and B major modes
     Layout<Shape<_1,_1,_1>>{}            // Atom layout
 ));
 
 // TMA copy atom
-using CopyA = SM100_TMA_LOAD;
-using CopyB = SM100_TMA_LOAD;
+using CopyA = SM90_TMA_LOAD;
+using CopyB = SM90_TMA_LOAD;
 ```
 
 ### SM100 Attention Kernels

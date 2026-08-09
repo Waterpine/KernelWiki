@@ -6,7 +6,7 @@ from_arch: sm90
 to_arch: sm100
 tags: [tcgen05, wgmma, tmem]
 related: [hw-tcgen05-mma, hw-tmem, technique-warp-specialization]
-sources: [doc-nvidia-tuning-guide, blog-tcgen05-tutorial, blog-colfax-cutlass]
+sources: [doc-nvidia-tuning-guide, doc-ptx-isa-sm100, blog-tcgen05-tutorial, blog-colfax-cutlass]
 blackwell_relevance: "Core MMA instruction change. wgmma (warp-group, register accumulators) replaced by tcgen05 (single-thread, TMEM accumulators)."
 confidence: source-reported
 reproducibility: pseudocode
@@ -30,7 +30,7 @@ This guide covers the migration from Hopper's `wgmma.mma_async` (SM90) to Blackw
 [ ] Replace wgmma.mma_async with tcgen05.mma
 [ ] Move accumulators from registers to TMEM (alloc/dealloc)
 [ ] Remove ldmatrix operations (tcgen05 reads directly from SMEM)
-[ ] Change SMEM swizzle from 64B to 128B
+[ ] Check the SMEM swizzle mode against the tcgen05 support matrix (all modes are valid for K-major operands; MN-major 32-bit operands require 128B-with-32B-atomicity, MN-major 8/16-bit operands forbid it) and make the shared memory descriptor agree with it
 [ ] Replace warpgroup commit/wait with tcgen05 fences
 [ ] Update warp specialization roles (fewer warps needed for MMA)
 [ ] Update tile sizes (128xN -> consider 256xN with 2-SM)
@@ -111,7 +111,7 @@ __global__ void blackwell_gemm(
 
     // TMEM accumulator -- NO REGISTER PRESSURE
     __shared__ uint32_t s_tmem_acc;
-    if (threadIdx.x == 0) {
+    if (threadIdx.x < 32) {  // one whole warp: tcgen05.alloc/dealloc are .sync.aligned
         uint32_t smem_addr =
             static_cast<uint32_t>(__cvta_generic_to_shared(&s_tmem_acc));
         asm volatile(
@@ -125,9 +125,13 @@ __global__ void blackwell_gemm(
     // Zero TMEM accumulator
     tmem_zero(tmem_acc, 256);
 
+    // disable-output-lane mask (4 elements for cta_group::1); all zero
+    // means no TMEM lane is masked off.
+    uint32_t mask[4] = {0, 0, 0, 0};
+
     // Mainloop
     for (int k = 0; k < K / TILE_K; ++k) {
-        // TMA load with 128B swizzle (mandatory for tcgen05)
+        // TMA load; the swizzle mode must match the shared memory descriptor
         tma_load_128b_swizzle(smem_a, A, tile_m, k);
         tma_load_128b_swizzle(smem_b, B, k, tile_n);
         wait_barrier();
@@ -136,13 +140,19 @@ __global__ void blackwell_gemm(
         // SINGLE THREAD issues MMA (not warpgroup)
         if (threadIdx.x == 0) {
             asm volatile(
+                "{\n\t"
+                ".reg .pred p;\n\t"
+                "setp.ne.b32 p, %4, 0;\n\t"
                 "tcgen05.mma.cta_group::1.kind::f16 "
-                "[%0], %1, %2, %3, 1;"
+                "[%0], %1, %2, %3, {%5, %6, %7, %8}, p;\n\t"
+                "}\n"
                 :
                 : "r"(tmem_acc),
                   "l"(make_smem_desc_128b(smem_a)),
                   "l"(make_smem_desc_128b(smem_b)),
-                  "r"(0)
+                  "r"(0),                    // idesc
+                  "r"(1),                    // enable-input-d (predicate source)
+                  "r"(mask[0]), "r"(mask[1]), "r"(mask[2]), "r"(mask[3])
             );
         }
         // NO commit/wait -- fully async, fence-based
@@ -158,7 +168,7 @@ __global__ void blackwell_gemm(
     store_output(acc_vals, C, row, col);
 
     // Deallocate TMEM (no equivalent needed on Hopper)
-    if (threadIdx.x == 0) {
+    if (threadIdx.x < 32) {
         asm volatile(
             "tcgen05.dealloc.cta_group::1.sync.aligned.b32 %0, %1;"
             :
@@ -184,6 +194,8 @@ float acc[4][32];  // Per-thread fragment of the warpgroup accumulator
 ```cuda
 // Blackwell: TMEM address replaces register array
 uint32_t tmem_acc = tmem_alloc(256);  // 128 rows x 256 cols in TMEM
+// ... and must be released with tmem_dealloc(tmem_acc, 256) before the kernel
+// exits; see the full alloc/dealloc pair earlier on this page.
 ```
 
 ### Step 2: Remove ldmatrix
@@ -210,7 +222,7 @@ uint64_t desc_a = make_smem_desc_128b(smem_a_ptr);
 // Pass desc_a directly to tcgen05.mma -- no register staging
 ```
 
-### Step 3: Change SMEM Swizzle from 64B to 128B
+### Step 3: Re-check the SMEM Swizzle Mode
 
 **Before (Hopper):** 64-byte or 128-byte swizzle both work for wgmma.
 
@@ -220,10 +232,12 @@ CUtensorMap desc = create_tma_desc(ptr, M, N, tile_m, tile_n,
                                     CU_TENSOR_MAP_SWIZZLE_64B);
 ```
 
-**After (Blackwell):** 128-byte swizzle is mandatory.
+**After (Blackwell):** several modes remain valid; the descriptor must agree.
 
 ```cuda
-// Blackwell TMA descriptor: MUST use 128B swizzle
+// K-major operands accept every swizzling mode; MN-major 32-bit operands
+// require 128B-with-32B-atomicity, MN-major 8/16-bit operands forbid it.
+// Whatever is chosen, bits 61-63 of the SMEM descriptor must encode it.
 CUtensorMap desc = create_tma_desc(ptr, M, N, tile_m, tile_n,
                                     CU_TENSOR_MAP_SWIZZLE_128B);
 ```
@@ -247,12 +261,18 @@ asm volatile("wgmma.commit_group.sync.aligned;");
 
 ```cuda
 // Blackwell: single thread issues tcgen05
+uint32_t mask[4] = {0, 0, 0, 0};   // disable-output-lane: mask nothing
 if (threadIdx.x == 0) {
     asm volatile(
+        "{\n\t"
+        ".reg .pred p;\n\t"
+        "setp.ne.b32 p, %4, 0;\n\t"
         "tcgen05.mma.cta_group::1.kind::f16 "
-        "[%0], %1, %2, %3, 1;"
+        "[%0], %1, %2, %3, {%5, %6, %7, %8}, p;\n\t"
+        "}\n"
         :
-        : "r"(tmem_acc), "l"(desc_a), "l"(desc_b), "r"(0)
+        : "r"(tmem_acc), "l"(desc_a), "l"(desc_b), "r"(0), "r"(1),
+          "r"(mask[0]), "r"(mask[1]), "r"(mask[2]), "r"(mask[3])
     );
 }
 // No commit needed -- fully async
@@ -348,7 +368,7 @@ Blackwell's base MMA tile is 2x larger in M (128 vs 64). When migrating:
 
 ## Common Migration Pitfalls
 
-1. **Forgetting 128B swizzle**: The most common silent-failure bug. wgmma works with 64B swizzle; tcgen05 does not. Results will be numerically wrong but the kernel won't crash.
+1. **Swizzle mode / descriptor mismatch**: The most common silent-failure bug. tcgen05 reads the swizzle mode from bits 61-63 of the shared memory descriptor; if that field does not describe the layout TMA actually wrote, results will be numerically wrong but the kernel won't crash. Note also that the descriptor encodes 128-byte swizzling as the value 2 -- the value 3 is invalid.
 
 2. **Not deallocating TMEM**: On Hopper, register accumulators are freed implicitly when the CTA exits. On Blackwell, TMEM must be explicitly deallocated in persistent kernels.
 
@@ -363,21 +383,22 @@ Blackwell's base MMA tile is 2x larger in M (128 vs 64). When migrating:
 If using CUTLASS, the migration is largely handled by changing the arch tag and kernel schedule:
 
 ```cpp
+// The arch tag and the kernel schedule are arguments of the
+// CollectiveBuilder, not of the device-level class.
+
 // Hopper CUTLASS GEMM
-using GemmHopper = cutlass::gemm::device::GemmUniversal<
+using MainloopHopper = typename cutlass::gemm::collective::CollectiveBuilder<
+    cutlass::arch::Sm90, cutlass::arch::OpClassTensorOp,
     /* ... */
-    cutlass::arch::Sm90,
-    /* ... */
-    cutlass::gemm::collective::KernelScheduleSm90CpAsyncWarpSpecialized
->;
+    cutlass::gemm::KernelTmaWarpSpecializedCooperative
+  >::CollectiveOp;
 
 // Blackwell CUTLASS GEMM -- change arch + schedule
-using GemmBlackwell = cutlass::gemm::device::GemmUniversal<
+using MainloopBlackwell = typename cutlass::gemm::collective::CollectiveBuilder<
+    cutlass::arch::Sm100, cutlass::arch::OpClassTensorOp,   // <-- changed
     /* ... */
-    cutlass::arch::Sm100,   // <-- changed
-    /* ... */
-    cutlass::gemm::collective::KernelScheduleSm100CpAsyncWarpSpecialized  // <-- changed
->;
+    cutlass::gemm::KernelTmaWarpSpecialized1SmSm100          // <-- changed
+  >::CollectiveOp;
 ```
 
 CUTLASS handles the internal differences (TMEM allocation, descriptor construction, fence insertion, 128B swizzle) automatically through its `MMA_Atom` and `MMA_Traits` abstractions for SM100.

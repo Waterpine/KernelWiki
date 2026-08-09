@@ -31,14 +31,7 @@ sources:
 - blog-deepgemm
 - blog-tflops-gap-fp4-moe
 - pr-vllm-23696
-performance_claims:
-- gpu: B200
-  dtype: nvfp4
-  shape: M=1024 N=2*2048 K=7168 (gate-up MLP)
-  metric: latency_us
-  value: 18.5
-  utilization: compute-bound
-  source_id: contest-gpumode-p3
+performance_claims: []
 blackwell_relevance: TMEM holds two accumulators simultaneously (gate, up), enabling
   single-kernel fusion that Hopper register file could not handle efficiently.
 artifact_dir: artifacts/kernels/gated-dual-gemm
@@ -91,6 +84,15 @@ __global__ void gated_dual_gemm_nvfp4(
         tcgen05_mma(x_smem[stage], wg_smem[stage], tmem_gate);
         tcgen05_mma(x_smem[stage], wu_smem[stage], tmem_up);
     }
+
+    // tcgen05.mma is ASYNCHRONOUS. Its completion must be observed before the
+    // accumulators are read -- either via tcgen05.commit signalling an
+    // mbarrier, or via tcgen05.wait. Reading TMEM straight after the loop
+    // would race with MMAs still in flight.
+    tcgen05_commit(&mma_done);      // tcgen05.commit.mbarrier::arrive...
+    mbarrier_wait(&mma_done);
+    asm volatile("tcgen05.fence::before_thread_sync;");
+    __syncthreads();
 
     // Fused epilogue: SiLU(gate) * up
     float g = tmem_load(tmem_gate);
