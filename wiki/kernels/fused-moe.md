@@ -161,6 +161,12 @@ __global__ void gated_dual_gemm_fused(
         );
     }
 
+    // tcgen05.mma is asynchronous: observe completion before reading the
+    // accumulators (tcgen05.commit signalling an mbarrier, or tcgen05.wait).
+    tcgen05_commit(&mma_done);
+    mbarrier_wait(&mma_done);
+    asm volatile("tcgen05.fence::before_thread_sync;");
+
     // Fused epilogue: SiLU(gate) * up
     // Read both accumulators from TMEM, apply activation, store result
     float gate_val = tmem_load_f32(tmem_gate);

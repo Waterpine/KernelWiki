@@ -33,6 +33,12 @@ __global__ void fused_gate_up_silu(...) {
         tcgen05_mma(x_smem, w_up_smem, tmem_up);
     }
 
+    // tcgen05.mma is asynchronous: observe completion before reading the
+    // accumulators (tcgen05.commit signalling an mbarrier, or tcgen05.wait).
+    tcgen05_commit(&mma_done);
+    mbarrier_wait(&mma_done);
+    asm volatile("tcgen05.fence::before_thread_sync;");
+
     float g = tmem_load(tmem_gate);
     float u = tmem_load(tmem_up);
     output = (g / (1.0f + expf(-g))) * u;  // SwiGLU fused

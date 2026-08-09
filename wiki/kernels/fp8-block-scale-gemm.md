@@ -90,6 +90,12 @@ __global__ void sm100_fp8_gemm_block_scale(...) {
         );
     }
 
+    // tcgen05.mma is asynchronous: observe completion before reading the
+    // accumulator (tcgen05.commit signalling an mbarrier, or tcgen05.wait).
+    tcgen05_commit(&mma_done);
+    mbarrier_wait(&mma_done);
+    asm volatile("tcgen05.fence::before_thread_sync;");
+
     // Read from TMEM, apply global scale, store
     float result = tmem_load(tmem) * global_scale;
     output[row * N + col] = __float2half(result);
