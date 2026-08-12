@@ -8,6 +8,7 @@ architectures:
   - sm90
   - sm90a
   - sm120
+  - sm80
 
 hardware_features:
   - tcgen05

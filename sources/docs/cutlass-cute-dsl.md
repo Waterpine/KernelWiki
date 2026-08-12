@@ -3,7 +3,7 @@ id: doc-cutlass-cute-dsl
 title: "CUTLASS CuTe DSL Documentation"
 url: https://github.com/NVIDIA/cutlass/tree/ad9bd53bdaec27a2e88053d57322ccf74efe525e/media/docs/pythonDSL
 source_category: official-doc
-architectures: [sm100, sm100a, sm90, sm90a]
+architectures: [sm80, sm100, sm100a, sm90, sm90a, sm120]
 tags: [cute-dsl, python, jit-compilation, gemm, tcgen05, tmem, tma, wgmma, mbarrier]
 retrieved_at: 2026-07-20
 ---
@@ -12,6 +12,40 @@ retrieved_at: 2026-07-20
 
 Compiled from the CUTLASS repo `media/docs/pythonDSL/` rst sources (commit `ad9bd53bdaec27a2e88053d57322ccf74efe525e`, generated 2026-07-20).
 Python CuTe DSL docs only; C++ docs and empty API-reference stubs are excluded.
+
+## License
+
+This page reproduces documentation from the [CUTLASS repository](https://github.com/NVIDIA/cutlass) (`media/docs/pythonDSL/` at commit `ad9bd53bdaec27a2e88053d57322ccf74efe525e`), including its image assets, which are licensed under the BSD 3-Clause License:
+
+> Copyright (c) 2017 - 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+> SPDX-License-Identifier: BSD-3-Clause
+>
+> Redistribution and use in source and binary forms, with or without
+> modification, are permitted provided that the following conditions are met:
+>
+> 1. Redistributions of source code must retain the above copyright notice, this
+> list of conditions and the following disclaimer.
+>
+> 2. Redistributions in binary form must reproduce the above copyright notice,
+> this list of conditions and the following disclaimer in the documentation
+> and/or other materials provided with the distribution.
+>
+> 3. Neither the name of the copyright holder nor the names of its
+> contributors may be used to endorse or promote products derived from
+> this software without specific prior written permission.
+>
+> THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+> AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+> IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+> DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+> FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+> DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+> SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+> CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+> OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+> OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Note: the CuTe DSL compiler components themselves are subject to a separate NVIDIA EULA (see the FAQ at the end of this page); the notice above covers the reproduced documentation text and images.
 
 ## Contents
 
@@ -150,7 +184,7 @@ CUTLASS DSL supports the same NVIDIA driver version as the corresponding [CUDA T
 To ensure compatibility with the examples and code on [GitHub](https://github.com/NVIDIA/cutlass/tree/main), use the [setup.sh](https://github.com/NVIDIA/cutlass/blob/main/python/CuTeDSL/setup.sh) file from the corresponding commit in the repository.
 
 ``` bash
-git clone https://github.com/NVIDIA/cutlass.git 
+git clone https://github.com/NVIDIA/cutlass.git
 
 # For CUDA Toolkit 12.9:
 ./cutlass/python/CuTeDSL/setup.sh --cu12
@@ -610,7 +644,7 @@ This can be tedious to write and tune. CuTe DSL provides a loop attribute to ask
 def example():
     ...
     # build a circular buffer
-    buffer = ... 
+    buffer = ...
 
     for i in cutlass.range(bound, prefetch_stages=prefetch_stages):
         # Compiler automatically handles the pipelining:
@@ -861,12 +895,12 @@ The type safety check helps catch the type mismatch issue early at the compile t
 
 CuTe DSL supports customized types for JIT function arguments by providing two runtime checkable protocols:
 
-- `JitArgument` which is used for host JIT functions to be called from Python.  
+- `JitArgument` which is used for host JIT functions to be called from Python.
   - `__c_pointers__`: Generate a list of ctypes pointers for the current object.
   - `__get_mlir_types__`: Generate a list of MLIR types for the current object.
   - `__new_from_mlir_values__`: Create a new object from MLIR values.
 
-- `DynamicExpression` which is used for device JIT functions to be called from the host JIT functions.  
+- `DynamicExpression` which is used for device JIT functions to be called from the host JIT functions.
   - `__extract_mlir_values__`: Generate a dynamic expression for the current object.
   - `__new_from_mlir_values__`: Create a new object from MLIR values.
 
@@ -968,7 +1002,7 @@ compiled_func(a_pack)
 Here we first convert a 1D `torch.Tensor` with 3 elements to a `cute.Tensor` using `from_dlpack`. Then we compile the JIT function `foo` with the converted `cute.Tensor` and call the compiled function.
 
     tensor.layout: (3):(1)
-    tensor: raw_ptr(0x00000000079e5100: i16, generic, align<2>) o (3):(1) = 
+    tensor: raw_ptr(0x00000000079e5100: i16, generic, align<2>) o (3):(1) =
     ( 1, 2, 3 )
 
 It prints `(3):(1)` for the layout because the converted `cute.Tensor` has a static layout with shape `(3)` which is the shape of the `a`.
@@ -983,7 +1017,7 @@ compiled_func(b_pack)  # ❌ This results in an unexpected result at runtime due
 
 Following is the output which is unexpected due to the type mismatch.
 
-    tensor: raw_ptr(0x00000000344804c0: i16, generic, align<2>) o (3):(1) = 
+    tensor: raw_ptr(0x00000000344804c0: i16, generic, align<2>) o (3):(1) =
     ( 11, 12, 13 )
 
 To fix that, we would have to trigger another code generation and compilation for the new shape for `b`.
@@ -996,7 +1030,7 @@ compiled_func_2(b_pack)                      # ✅ Now this works fine
 As shown in the example above, with the newly compiled `compiled_func_2`, we can pass in `b_pack` to the compiled JIT function `compiled_func_2`.
 
     tensor.layout: (5):(1)
-    tensor: raw_ptr(0x0000000034bb2840:: i16, generic, align<2>) o (5):(1) = 
+    tensor: raw_ptr(0x0000000034bb2840:: i16, generic, align<2>) o (5):(1) =
     ( 11, 12, 13, 14, 15 )
 
 Now it recompiles and prints the values of `b` correctly.
@@ -1471,19 +1505,19 @@ str(int_val)  # Returns "?{div=4}"
 ratio = cute.Ratio(numerator, denominator)
 ```
 
-param numerator  
+param numerator
 The numerator of the ratio
 
-type numerator  
+type numerator
 int
 
-param denominator  
+param denominator
 The denominator of the ratio
 
-type denominator  
+type denominator
 int
 
-raises TypeError  
+raises TypeError
 If numerator or denominator are not integers
 
 **Methods:**
@@ -1530,19 +1564,19 @@ int_val = ratio.to(int)  # Returns 1
 sb = cute.ScaledBasis(value, mode)
 ```
 
-param value  
+param value
 The scale value
 
-type value  
+type value
 Union\[int, Integer, Ratio, ir.Value\]
 
-param mode  
+param mode
 The mode identifying the basis element
 
-type mode  
+type mode
 Union\[int, List\[int\]\]
 
-raises TypeError  
+raises TypeError
 If mode is not an integer or list of integers
 
 **Examples:**
@@ -1856,16 +1890,16 @@ storage.x = ...
 cute.struct.MemRange[dtype, size]
 ```
 
-param dtype  
+param dtype
 The data type (must be a DSL scalar type)
 
-type dtype  
+type dtype
 Type\[Numeric\]
 
-param size  
+param size
 The number of elements in the range
 
-type size  
+type size
 int
 
 **Properties:**
@@ -1911,16 +1945,16 @@ tensor = buf.data.get_tensor(layout)
 cute.struct.Align[dtype, alignment]
 ```
 
-param dtype  
+param dtype
 The type to align (scalar, MemRange, or struct)
 
-type dtype  
+type dtype
 Type
 
-param alignment  
+param alignment
 The alignment in bytes (must be \> 0)
 
-type alignment  
+type alignment
 int
 
 **Properties:**
@@ -2117,7 +2151,7 @@ print(y)              # Tensor<0x000000000875f580@generic o (30, 20):(20, 1)>
 
 The string format of the resulting CuTe tensor is
 
-``` 
+```
 Tensor<0x{tensor.data_ptr:016x}@{tensor.memspace} o {tensor.shape}:{tensor.stride}>
 ```
 
@@ -3232,19 +3266,19 @@ During profiling, `run-iket` prepares the kernel for collection, patches the pla
 
 ### Troubleshooting
 
-Empty or missing trace  
+Empty or missing trace
 Confirm that the workload is launched under `run-iket` and that the instrumented kernels are JIT-compiled in that profiled process. If running without `run-iket`, confirm that `CUTE_DSL_COMPILER_OPT=iket` is set or that the kernel is compiled with `options="iket"`.
 
-Trace is very large or profiling fails  
+Trace is very large or profiling fails
 Reduce the number of instrumented kernel launches, reduce event frequency, or reduce payload use. If the workload can legitimately emit more records per warp than the profiler detects automatically, increase `--max-ts-cnt-per-warp <N>` to reserve space for up to `N` events per warp. Choose `N` above the largest expected number of marker, range-start, range-end, range-push, and range-pop events emitted by one warp in one kernel launch.
 
-Expected events do not appear  
+Expected events do not appear
 Confirm the IKET calls are inside `@cute.kernel` code and are reachable on the execution path being profiled. Also check that paired range endpoints are not split across divergent branches. If the workload caches a compiled kernel or executor, make sure that compilation happens inside the `run-iket` profiling process or clear the application-level compiled kernel cache before profiling.
 
-Unexpected timing around asynchronous work  
+Unexpected timing around asynchronous work
 Move range endpoints to the wait or synchronization point that observes completion.
 
-Inspect generated IR  
+Inspect generated IR
 Use existing CuTe DSL debugging options such as `CUTE_DSL_KEEP=ir` or `CUTE_DSL_PRINT_IR=1` to inspect generated IR when diagnosing whether IKET operations were emitted.
 
 ---
@@ -4104,7 +4138,7 @@ module = cute.runtime.load_module("./artifacts/libprint_tensor_example.so")
 # Prepare data
 a = torch.arange(160, dtype=torch.float32, device="cuda").reshape(16, 10)
 a_cute = from_dlpack(a).mark_layout_dynamic()
-stream = cuda.CUstream(0)  
+stream = cuda.CUstream(0)
 
 # Call the function (no JIT compilation needed!)
 module.print_tensor(a_cute, stream=stream)
@@ -4169,12 +4203,12 @@ void run_print_tensor() {
     // Load module from shared library
     CuteDSLRT_Module_t *module = nullptr;
     CuteDSLRT_Error_t err = CuteDSLRT_Module_Load(
-        &module, 
+        &module,
         "./artifacts/libprint_tensor_example.so"
     );
     // or
     CuteDSLRT_Error_t err = CuteDSLRT_Module_Load(
-        &module, 
+        &module,
         "./artifacts/print_tensor_example.o"
     );
     check_error(err);
@@ -4801,7 +4835,7 @@ C tile (M=32, N=32)
 
 So far each entry of `permutation_mnk` has been an integer, which is shorthand for the identity layout `Layout<Shape<S>, Stride<_1>>` — the atom pattern simply tiles to fill an `S`-wide footprint. The general form lets each entry be a `Layout` that **reorders coordinates inside that mode** while keeping the same total size. That reordering is what gives the parameter its name; the integer-only cases used earlier are just the identity permutation.
 
-The canonical illustration is the SM70 example from [0t_mma_atom.md](../../cpp/cute/0t_mma_atom.md). Take a 2x2 tiled MMA of `SM70_8x8x4_F32F16F16F32_NT` atoms with a `32x32x4` footprint. Without any M-mode permutation, thread `T0`'s 8 A-values land at the following `(m, k)` coordinates:
+The canonical illustration is the SM70 example from [0t_mma_atom.md](https://github.com/NVIDIA/cutlass/blob/ad9bd53bdaec27a2e88053d57322ccf74efe525e/media/docs/cpp/cute/0t_mma_atom.md). Take a 2x2 tiled MMA of `SM70_8x8x4_F32F16F16F32_NT` atoms with a `32x32x4` footprint. Without any M-mode permutation, thread `T0`'s 8 A-values land at the following `(m, k)` coordinates:
 
     T0V0 => (0, 0)     T0V4 => (16, 0)
     T0V1 => (1, 0)     T0V5 => (17, 0)
@@ -7617,20 +7651,20 @@ This section documents the current limitations of the CuTe DSL. While some of th
 
 ### Programming Model
 
-**CuTe Layout Algebra Only support 32bit**  
+**CuTe Layout Algebra Only support 32bit**
 Today, we only support 32bit shapes/strides in CuTe layouts. 64bit or arbitrary width support is planned for future releases.
 
-**Python Native Data Types**  
+**Python Native Data Types**
 CuTe DSL supports Python data structures when used for "meta-programming," but these structures cannot be treated as dynamic values modifiable at runtime. For instance, lists and dictionaries can be used to configure kernel parameters during compilation or serve as containers for dynamic values, but their structure and organization cannot be altered during kernel execution.
 
-- **Static Values:**  
+- **Static Values:**
   - Evaluated during JIT compilation phase
   - Immutable after compilation completes
   - Most Python native types (lists, tuples, dictionaries) are processed as static values
   - Primarily utilized for "meta-programming" and configuration purposes
   - Example: Lists can contain dynamic values but their structure cannot be modified during kernel execution
 
-- **Dynamic Values:**  
+- **Dynamic Values:**
   - Evaluated during runtime execution
   - Modifiable during execution of JIT-compiled functions
   - Only a specific subset of Python types are supported as dynamic values
@@ -7661,7 +7695,7 @@ def foo(a: Float32, b: Float32, i: Int32, res: cute.Tensor):
         xs.append(Float32(1.0))
 ```
 
-**Python Function**  
+**Python Function**
 The DSL currently has **limited support for return values** from Python functions. At the moment, only `constexpr` values can be returned, while returning **dynamic values** is **not yet supported**. This capability is planned for a future release.
 
 Example:
@@ -7684,7 +7718,7 @@ val = bar(10)   # works
 foo(10)         # currently unsupported in CuTe DSL
 ```
 
-**Expression or Statement with Dependent Type**  
+**Expression or Statement with Dependent Type**
 CuTe DSL implements static typing and does not support dependent types. The type of each expression must be determinable during compile time, in contrast to standard Python which implements dynamic typing.
 
 Example illustrating functionality in Python that is not supported in the DSL:
@@ -7711,7 +7745,7 @@ def foo(cond: Boolean, a: Int32, b: Float32, res: cute.Tensor):
     res[0] = a if cond else b
 ```
 
-**Control Flow**  
+**Control Flow**
 The DSL transforms Python control flow statements (`if`, `for`, `while`) during Abstract Syntax Tree (AST) processing into structured control flow in MLIR which has the same constraints as dependent types. For instance, changing type of a variable in loop body is not allowed.
 
 - Variables must be defined prior to the control flow statement
@@ -7728,10 +7762,10 @@ def foo():
         a = Float32(2)  # Changing type inside loop-body is not allowed in the DSL
 ```
 
-**Built-in Operators**  
+**Built-in Operators**
 The DSL transforms built-in operators like `and`, `or`, `max`, `min`, etc. into MLIR operations. They also follow the same constraints of dependent types. For instance, `a and b` requires `a` and `b` to be of the same type.
 
-**Special Variables**  
+**Special Variables**
 The DSL treats `_` as a special variable that it's value is meant to be ignored. It is not allowed to read `_` in the DSL.
 
 Example illustrating functionality in Python that is not supported in the DSL:
@@ -7743,7 +7777,7 @@ def foo():
     print(_)  # This is not allowed in the DSL
 ```
 
-**Object Oriented Programming**  
+**Object Oriented Programming**
 The DSL is implemented on top of Python and supports Python's object-oriented programming (OOP) features for meta-programming at compile-time.
 
 However, similar to other composed data types, the DSL provides limited support for OOP when objects contain dynamic values. It is strongly recommended to avoid passing dynamic values between member methods through class state in your code.
@@ -7776,19 +7810,19 @@ The example above fails to compile because `Foo.a` is assigned a local value def
 
 The CuTe DSL implements an internal mechanism that provides limited support for OOP patterns via protocol. As the DSL continues to evolve to support additional features, this mechanism is subject to change and is not recommended for direct use in users' code for better portability.
 
-**CuTe Layout algebra in native Python**  
+**CuTe Layout algebra in native Python**
 Entirety of CuTe Layout algebra operations and APIs require JIT compilation. These functionalities are exclusively available within JIT-compiled functions and cannot be accessed in standard Python execution environments.
 
 Additionally, there exists a restricted set of data types that can be passed as arguments to JIT-compiled functions, which further constrains their usage in native Python contexts. Only following CuTe algebra types are supported as JIT function arguments: `Tensor`, `Pointer`, `Shape`, `Stride`, `Coord` and `IntTuple`. For `Stride`, we don't support `ScacledBasis` from native Python Context. Unfortunately, in the first release, we don't support passing `Layout` under native Python Context.
 
-**Block-level Utilities (block_copy)**  
+**Block-level Utilities (block_copy)**
 The block-level utility `block_copy` provides a high-level abstraction for common copy patterns, but has the following limitations:
 
 **block_copy limitations:**
 
 - **Limited copy op support**: Currently only `TmaCopyOp`-based tiled copies (TMA loads/stores) and S2T copies (SMEM to TMEM, e.g., `tcgen05.Cp*Op`) are supported. Other `TiledCopy` ops will raise `NotImplementedError`. Support for additional copy ops may be added in future releases.
 
-**Global variables**  
+**Global variables**
 CuTe DSL does not support global variables. It is not allowed to use `global` in the DSL. The following example illustrates functionality in Python that is not supported in the DSL:
 
 ``` python
@@ -7802,7 +7836,7 @@ foo()
 
 The example above fails to compile because `global x` is not supported in the DSL.
 
-**Nonlocal variables**  
+**Nonlocal variables**
 The use of the `nonlocal` keyword is restricted in CuTe DSL. CuTe DSL does not support capturing variables from an outer (enclosing) scope that is outside of the JIT-compiled function. If you try to use `nonlocal` to refer to a variable defined in Python code that is not tracked by current JIT context, a runtime error will be raised.
 
 ``` python
@@ -7836,13 +7870,13 @@ beta = 2.0   # Explicitly defined as float
 result = max(alpha, beta)  # Will correctly perform float comparison
 ```
 
-**Debugging Capabilities**  
+**Debugging Capabilities**
 Debugging tools and facilities for the Python DSL are currently more limited in comparison to the C++ API. For instance, we don't support single-stepping through the JIT-compiled code. And lack of exception handling in JIT-compiled code makes it hard to debug in some cases.
 
-**Integration with Frameworks**  
+**Integration with Frameworks**
 Integration with certain deep learning frameworks is in early development stages and may have limitations. For instance, converting frameworking tensor to cute.Tensor is known to have overhead with 2us~3us per tensor as we convert from general DLPack protocol which offers comptibility with all frameworks.
 
-**Hashing DSL APIs and Objects**  
+**Hashing DSL APIs and Objects**
 DSL APIs and Objects are sensitive to MLIR context, region or other contextual information which has no meaning cross different context. Any stateful design rely on `__hash__` likely misbehave with unexpected results. An example is `functools.lru_cache`, which combined with `@cute.jit`, it may cache MLIR object from one context and use in another one.
 
 ### Future Improvements
