@@ -3,8 +3,8 @@ id: lang-cute-dsl
 title: "CuTe DSL for Blackwell"
 type: language
 tags: [cute-dsl, tcgen05, tmem, tma]
-related: [hw-tcgen05-mma, hw-tmem, kernel-flash-attention-4, doc-cutlass-blackwell]
-sources: [doc-cutlass-blackwell, blog-colfax-cutlass, blog-flash-attention-4]
+related: [hw-tcgen05-mma, hw-tmem, kernel-flash-attention-4, doc-cutlass-blackwell, doc-cutlass-cute-dsl]
+sources: [doc-cutlass-blackwell, doc-cutlass-cute-dsl, blog-colfax-cutlass, blog-flash-attention-4]
 reproducibility: snippet
 architectures: [sm100, sm100a]
 confidence: source-reported
@@ -116,3 +116,4 @@ The `fp16_gemm_{0..6}.py` series from `examples/python/CuTeDSL/blackwell/tutoria
 - [tcgen05-mma](../hardware/tcgen05-mma.md) — Underlying MMA instruction
 - [flash-attention-4](../kernels/flash-attention-4.md) — CuTe-DSL implementation
 - [CUTLASS Blackwell docs](../../sources/docs/nvidia-cutlass-blackwell.md) — Official reference
+- [Full CuTe DSL documentation](../../sources/docs/cutlass-cute-dsl.md) — Compiled official Python DSL documentation
