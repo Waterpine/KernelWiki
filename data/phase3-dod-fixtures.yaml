@@ -25,14 +25,9 @@ fixtures:
       # Canonical kernel must be ≥200 lines (the plan's evidence floor).
       - glob: "artifacts/kernels/nvfp4-gemv/full/nvfp4_scaled_mm_kernels.cu"
         min_lines: 200
-      # Contest-reconstructed progression provides the hackathon-winning path.
-      # Individual extracted snippets are small; the floor here is just
-      # "non-empty", enforced by the default 20-line floor.
-      - glob: "artifacts/contests/gpu-mode-nvfp4/problem-1-gemv/submissions/rank-2-yue/*.cpp"
-        min_lines: 8
     required_min_lines: 200
-    required_provenance_modes: [verbatim, extracted]
-    required_bundle_asset_mode: [verbatim, extracted]
+    required_provenance_modes: [verbatim]
+    required_bundle_asset_mode: [verbatim]
     required_content_patterns:
       - "nvfp4|fp4|e2m1"
 
@@ -67,9 +62,8 @@ fixtures:
   - question: "How does FlashAttention-4 implement software-emulated exponential and softmax rescaling?"
     required_assets:
       - "artifacts/kernels/flash-attention-4/full/sm100_fmha_bwd_mla_kernel_tma_warpspecialized.hpp"
-      - "artifacts/blogs/flash-attention-4/code/01-software-exp-cody-waite-horner.cu"
     required_min_lines: 20
-    required_provenance_modes: [verbatim, extracted]
-    required_bundle_asset_mode: [verbatim, extracted]
+    required_provenance_modes: [verbatim]
+    required_bundle_asset_mode: [verbatim]
     required_content_patterns:
       - "exp2?|rescale|softmax|cody.waite|horner"

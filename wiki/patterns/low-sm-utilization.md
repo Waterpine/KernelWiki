@@ -6,37 +6,22 @@ tags: [persistent-kernel, clc, tile-scheduling]
 symptoms: [low-sm-utilization, tail-effect, load-imbalance]
 candidate_techniques: [technique-persistent-kernels, technique-tile-scheduling, hw-clc]
 related: [pattern-tail-effect, pattern-compute-bound]
-sources: [doc-nvidia-tuning-guide, blog-tcgen05-tutorial, pr-cutlass-2161]
+sources: [doc-ptx-isa-sm100, doc-cutlass-clc, doc-nvidia-tuning-guide, blog-tcgen05-tutorial, pr-cutlass-2161]
 ---
 
-## Symptom
+## Diagnosis
 
-SM utilization below 60% despite sufficient occupancy. Nsight Compute shows idle SMs during portions of kernel execution.
+Determine whether idle capacity comes from a small grid, cluster placement,
+resource-limited residency, wave quantization, or variable work duration.
+“Utilization below 60%” is not an architectural threshold.
 
-## Likely Causes
+| Candidate | Scope |
+|---|---|
+| Larger/smaller tiles | Changes work-item count and per-item efficiency. |
+| Static or software-persistent mapping | Lets a resident CTA process multiple logical tiles. |
+| CLC | Can claim not-yet-launched CTA/cluster IDs; it does not assign arbitrary work. |
+| Swizzle/raster change | Changes locality/order, not the number of physical workers. |
 
-1. **Tail effect**: Last wave of tiles leaves most SMs idle (see [tail-effect](tail-effect.md))
-2. **Load imbalance**: Some tiles take longer than others (variable computation per tile)
-3. **Static scheduling**: Fixed tile-to-SM assignment doesn't adapt to runtime conditions
-4. **Grid too small**: Fewer threadblocks than SMs
-
-## Candidate Techniques
-
-| Technique | Applicability | Effect |
-|---|---|---|
-| [CLC](../hardware/clc.md) | SM100 only | Dynamic tile assignment, eliminates load imbalance |
-| [Persistent kernels](../techniques/persistent-kernels.md) | SM90+ | Eliminates tail effect, one-time launch overhead |
-| [Tile scheduling](../techniques/tile-scheduling.md) | SM90+ | Better L2 locality, reduce load variance |
-
-## Examples
-
-```
-// tcgen05 tutorial progression:
-// Without persistent/CLC: 86% of cuBLAS (some SMs idle at wave boundaries)
-// With persistent + CLC:  98% of cuBLAS (all SMs stay busy)
-```
-
-## Caveats
-- CLC only available on SM100 datacenter GPUs (not SM120 consumer)
-- Persistent kernels complicate debugging and profiling
-- For non-persistent kernels, ensure grid size >> SM count
+CLC cannot eliminate all imbalance, and persistence does not eliminate kernel
+launch overhead (the persistent kernel still launches). Compare variants using
+the same tile mapping and count cancellation/request overhead.

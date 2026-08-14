@@ -5,6 +5,8 @@
 architectures:
   - sm100
   - sm100a
+  - sm103
+  - sm103a
   - sm90
   - sm90a
   - sm120
@@ -18,6 +20,7 @@ hardware_features:
   - pdl
   - gdc
   - nvfp4
+  - mxfp4
   - fp8
   - fp6
   - fp4

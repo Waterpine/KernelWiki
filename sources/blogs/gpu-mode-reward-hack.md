@@ -6,7 +6,7 @@ url: https://www.gpumode.com/news/reward-hacking-nvfp4
 source_category: community-note
 architectures: [sm100, sm100a]
 tags: [nvfp4, grouped-gemm, fp4, gemm]
-retrieved_at: 2026-04-17
+retrieved_at: 2026-08-13
 ---
 
 # Anatomy of a Reward Hack (GPU Mode)

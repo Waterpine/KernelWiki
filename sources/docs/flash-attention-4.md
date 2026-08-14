@@ -1,33 +1,39 @@
 ---
 id: doc-flash-attention-4
-title: "FlashAttention-4: Hardware-Friendly Attention on Blackwell"
+title: "FlashAttention-4: Algorithm and Kernel Pipelining Co-Design for Asymmetric Hardware Scaling"
 url: https://arxiv.org/abs/2603.05451
 source_category: paper
 architectures: [sm100]
 tags: [attention, flash-attention, tcgen05, tmem, 2sm-cooperative, software-exp, ping-pong-scheduling]
-retrieved_at: 2026-04-16
+retrieved_at: 2026-08-13
 ---
 
-## Summary
+## Verified paper claims
 
-FlashAttention-4 paper — algorithm-kernel co-design for Blackwell's asymmetric hardware scaling (tensor core throughput doubles but SFU count unchanged).
+FlashAttention-4 targets B200/GB200 with BF16 and addresses tensor-core
+throughput growing faster than shared-memory, exponential-unit, and scalar-ALU
+throughput. Its principal techniques are:
 
-## Key Contributions
+- forward and backward pipelines that overlap MMA, softmax, and memory work;
+- two query tiles per CTA in a ping-pong forward schedule;
+- partial software emulation of `exp2` using range reduction and a polynomial,
+  while retaining hardware exponential for most values to control register use;
+- conditional online-softmax rescaling;
+- TMEM and two-CTA MMA in backward to reduce shared-memory traffic and dQ
+  atomic reductions;
+- deterministic backward support and Blackwell-specific scheduling/resource
+  allocation.
 
-### Forward Pass
-- Ping-pong scheduling with two 128-token query tiles per CTA
-- Dedicated softmax warpgroups handle S=QK^T accumulator in TMEM
-- Software-emulated exponential via Cody-Waite range reduction + Horner polynomial
-- Conditional softmax rescaling (only when max jump is large)
+The implementation is in CuTe DSL. The paper reports 20--30x shorter compile
+times than its C++ template comparison.
 
-### Backward Pass
-- 2-CTA backward spanning paired CTAs in a cluster, sharing TMEM
-- Halves shared memory traffic and global atomic reductions for dQ
+## Performance context
 
-### Implementation
-- Written in CuTe-DSL (Python), 20-30x faster compilation than C++ templates
+On B200 with FP16/BF16, batch size chosen for 32k total tokens, sequence lengths
+from 1k through 32k, and the paper's head-dimension configurations, the paper
+reports up to 1613 TFLOP/s (about 71% of its theoretical maximum), up to 1.3x
+over cuDNN 9.13, and up to 2.7x over its Triton baseline.
 
-## Performance
-- Up to 1605 TFLOPS on B200 BF16 (71% utilization)
-- 1.1-1.3x over cuDNN 9.13
-- 2.1-2.7x over Triton
+The previous source page recorded 1605 TFLOP/s and attached it to a single
+8192-by-128 shape. The paper's headline is 1613 and is the maximum over the
+reported sweep, so the narrower attribution was removed.

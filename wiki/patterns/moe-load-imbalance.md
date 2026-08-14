@@ -17,7 +17,7 @@ MoE grouped GEMM shows uneven per-expert compute time. Some SMs finish their exp
 
 ## Likely Causes
 
-1. **Skewed token distribution**: Router sends 80% of tokens to 20% of experts (common in trained MoE models)
+1. **Skewed token distribution**: Router assignments create unequal expert row counts
 2. **Static tile assignment**: Precomputed tile→SM mapping cannot rebalance at runtime
 3. **Masked layout waste**: Fixed M_max per expert wastes compute on padding rows
 4. **Small-M per expert**: When M < BLOCK_M, thin-GEMM underutilizes tensor cores
@@ -26,12 +26,12 @@ MoE grouped GEMM shows uneven per-expert compute time. Some SMs finish their exp
 
 | Technique | Effect |
 |---|---|
-| [CLC (Cluster Launch Control)](../hardware/clc.md) | Hardware dynamic tile assignment — fastest SMs grab more tiles |
-| [Persistent kernels](../techniques/persistent-kernels.md) | Amortize launch overhead; loop over dynamic work queue |
+| [CLC (Cluster Launch Control)](../hardware/clc.md) | Workers may claim not-yet-launched grid IDs and map them to expert tiles |
+| [Persistent kernels](../techniques/persistent-kernels.md) | Let resident workers process multiple logical tiles |
 | [Contiguous layout](../kernels/grouped-gemm.md) | Pack variable-M experts sequentially; offsets array indexes expert boundaries |
 | [Masked layout](../kernels/grouped-gemm.md) | Good for CUDA graph capture; wastes compute on padding |
 | [K-grouped layout](../kernels/grouped-gemm.md) | For weight gradient computation with variable K per expert |
-| [EPLB (Expert Parallel Load Balancer)](https://github.com/deepseek-ai/EPLB) | Replicate heavy experts across GPUs; 1.49x prefill speedup, 2.54x decode |
+| Expert replication/load balancing | System-level option; measure communication, memory, and routing effects separately |
 
 ## Example: Reward Hack in GPU Mode Problem 4
 
@@ -39,17 +39,19 @@ The 1st-place submission exploited the evaluation harness rather than truly bala
 - Correctness phase: real kernel ran on cloned data
 - Timing phase: detected reused objects, fired 120-group super-batch in call 1, returned cached results for calls 2-15
 
-This highlighted that even careful tile scheduling can be outrun by algorithmic restructuring — and prompted the MLSys 2026 FlashInfer contest to add runtime isolation + subprocess eval.
+This is recorded only as an unverified report about the earlier harness. No
+authoritative source in this page establishes that it prompted a particular
+MLSys 2026 evaluator change.
 
 ## Caveats
 
-- CLC only available on SM100 datacenter (not SM120 consumer)
-- Dynamic scheduling has small per-tile overhead vs static precomputed
+- Use the PTX target table for CLC support; do not infer it from product branding alone
+- Dynamic scheduling has request/coordination overhead that must be measured
 - Small experts may not benefit — minimum viable tile size is a floor
 - EPLB works at cluster scale, not single-device
 
 ## When NOT An Issue
 
-- Uniform routing (rare in practice)
+- Sufficiently uniform routing for the measured batch
 - Very large batch sizes (statistics average out)
 - Training with auxiliary load balancing loss

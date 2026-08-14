@@ -35,7 +35,7 @@ NVFP4 uses a two-level microscaling architecture:
 
 ### Block-Level Scale
 - **Block size**: 16 contiguous FP4 elements (half of MXFP4's 32)
-- **Scale format**: E4M3 (8-bit floating point), covering range [-448, 448]
+- **Scale format**: UE4M3, a 7-bit unsigned encoding carried in 8 bits; finite values are nonnegative and reach 448
 - Smaller blocks provide finer-grained scaling, better fitting values into the FP4 representable range
 
 ### Tensor-Level Scale
@@ -49,7 +49,7 @@ The two-level microscaling quantization works as follows:
 
 1. **Per-block maximum**: amax(b) = max|x_i| within each 16-element block
 2. **Global FP32 scale**: s_m = max_b(amax(b)) / (6 * 448)
-3. **Block E4M3 scale**: s_b = cast_E4M3((amax(b) / s_m) / 6)
+3. **Block UE4M3 scale**: s_b = cast_UE4M3((amax(b) / s_m) / 6)
 4. **Element quantization**: q_i = cast_FP4(x_i / (s_m * s_b))
 
 ## Dequantization Formula
@@ -69,14 +69,14 @@ Where s_m is the FP32 tensor-level scale, s_b is the E4M3 block-level scale, and
 | Element format | E2M1 | E2M1 (same) |
 | Block size | 32 elements | 16 elements |
 | Scale format | UE8M0 (power-of-2 only) | E4M3 (mantissa bits) |
-| Scale range | 2^-127 to 2^127 | [-448, 448] |
+| Scale range | 2^-127 to 2^127 | nonnegative, finite maximum 448 |
 | Tensor-level scale | None | FP32 |
 | Precision | All FP4 | ~6.25% near-FP8 (amax values) |
 
 ### Key Advantages of NVFP4
 
 - **Smaller blocks**: 16 vs 32 elements narrows the dynamic range within each block, better fitting values into the FP4 range
-- **E4M3 scale format**: Unlike MXFP4's power-of-two-only UE8M0 scales, E4M3 has mantissa bits that enable non-power-of-two scale factors for finer granularity
+- **UE4M3 scale format**: Unlike MXFP4's power-of-two-only UE8M0 scales, UE4M3 has mantissa bits that enable non-power-of-two, nonnegative scale factors for finer granularity
 - **Tensor-level FP32 scale**: Provides an additional level of dynamic range adjustment that MXFP4 lacks
 - **Hardware native**: Direct support in Blackwell tensor cores (tcgen05) without software emulation
 
@@ -84,7 +84,10 @@ Where s_m is the FP32 tensor-level scale, s_b is the E4M3 block-level scale, and
 
 In memory, NVFP4 data is stored as:
 - FP4 data tensor: packed 2 elements per byte (4 bits each)
-- Scale tensor: one E4M3 value per 16 FP4 elements
+- Scale tensor: one UE4M3 value per 16 FP4 elements
 - Global scale: single FP32 value per tensor
 
-The overhead of scale factors is 1 byte per 16 elements = 6.25% overhead, compared to MXFP4's 1 byte per 32 elements = 3.125% overhead. The trade-off is better quantization accuracy from finer-grained scaling.
+Relative to the packed FP4 payload, block-scale storage adds 1 byte per
+8-byte NVFP4 block (12.5% overhead) or 1 byte per 16-byte MXFP4 block
+(6.25% overhead). The NVFP4 trade-off is twice the scale-metadata overhead
+for finer-grained, more expressive scaling.

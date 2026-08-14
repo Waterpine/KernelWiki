@@ -4,9 +4,9 @@ title: "K-Search: LLM Kernel Generation via Co-Evolving Intrinsic World Model"
 author: Shiyi Cao et al.
 url: https://arxiv.org/abs/2602.19128
 source_category: community-note
-architectures: [sm100, sm100a]
+architectures: [sm100, sm100a, sm90]
 tags: [jit-compilation, gemm, attention, moe, mla, kernel-fusion]
-retrieved_at: 2026-04-17
+retrieved_at: 2026-08-14
 ---
 
 # K-Search: LLM Kernel Generation via Co-Evolving Intrinsic World Model
@@ -57,8 +57,8 @@ Rather than searching directly in program space, K-Search maintains a separate o
 | Kernel Type | vs OpenEvolve | vs ShinkaEvolve |
 |---|---|---|
 | Average across all | 2.10x | 2.21x |
-| Complex MoE kernels | up to 14.3x | -- |
-| MLA prefill tasks | 2.95-5.10x | -- |
+| FP8 MoE | 14.3x | 1.58x |
+| MLA prefill | 2.95x | 5.10x |
 | GQA paged decode | significant | -- |
 
 ### GPU Mode TriMul Competition

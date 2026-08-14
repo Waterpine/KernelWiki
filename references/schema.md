@@ -22,6 +22,14 @@ Every page has a unique `id` with a type-specific prefix:
 ## Required Frontmatter by Type
 
 ### source-pr
+
+For generated `source-pr` pages, `date` is the UTC calendar date from GitHub's
+`created_at` field. It is deliberately distinct from the merge date; a merged
+page records merge state and `merge_sha`, but does not repurpose `date`.
+The block below is a shape/template example: placeholder fields such as
+`username`, `abc12345`, and the abbreviated title are not an authoritative
+record of CUTLASS PR 2472.
+
 ```yaml
 id: pr-cutlass-2472
 repo: NVIDIA/cutlass
@@ -60,9 +68,9 @@ sources: [doc-flash-attention-4, blog-flash-attention-4, pr-...]
 performance_claims:
   - gpu: B200
     dtype: bf16
-    shape: "seqlen=8192, headdim=128"
+    shape: "maximum over B200 BF16 sweep: seqlen=1K-32K, 32K total tokens"
     metric: TFLOPS
-    value: 1605
+    value: 1613
     utilization: "71%"
     source_id: doc-flash-attention-4
 ```
@@ -94,7 +102,7 @@ For `wiki-technique`, `wiki-kernel`, `wiki-language`, must be ≥ `snippet`.
 |-------|---------|
 | `concept` | Text only |
 | `pseudocode` | Language-agnostic algorithm |
-| `snippet` | Compilable code fragment (verified by validator) |
+| `snippet` | Language-typed fragment with real syntax; surrounding declarations may be required. The validator performs a structural check, not a compilation. |
 | `runnable` | Self-contained buildable example |
 | `benchmarked` | Runnable + perf numbers with env metadata |
 
@@ -102,8 +110,14 @@ For `wiki-technique`, `wiki-kernel`, `wiki-language`, must be ≥ `snippet`.
 
 All values in these fields must appear in `data/tags.yaml`:
 
-- **architectures**: sm100, sm100a, sm90, sm90a, sm120
-- **hardware_features**: tcgen05, tmem, tma, clc, 2sm-cooperative, pdl, gdc, nvfp4, fp8, fp6, fp4, block-scale, wgmma, cluster, mbarrier
+- **architectures**: sm100, sm100a, sm103, sm103a, sm90, sm90a, sm120
+
+For generated source-PR pages, `architectures` records only targets explicitly
+named by captured PR text or changed paths. An empty list means the exact target
+is not established; candidate inclusion by itself is topical relevance, not
+architecture evidence.
+- **hardware_features**: tcgen05, tmem, tma, clc, 2sm-cooperative, pdl, gdc, nvfp4, mxfp4, fp8, fp6, fp4, block-scale, wgmma, cluster, mbarrier
+- **architectures** records exact targets or benchmark devices directly named by the captured source. When both a compiled component target and a different benchmark device are listed, the page body must distinguish those evidence roles.
 - **techniques**: warp-specialization, persistent-kernel, swizzling, pipeline-stages, double-buffering, register-reuse, epilogue-fusion, tile-scheduling, tma-multicast, software-exp, fine-grained-quantization, cuda-core-promotion, jit-compilation, vectorized-loads, cache-policy, kernel-fusion, chunk-parallelism, loop-unrolling, register-budgeting, shared-memory-optimization, ping-pong-scheduling, conditional-rescaling, data-reuse, per-k-specialization
 - **kernel_types**: gemm, attention, moe, sparse-attention, gemv, grouped-gemm, gated-delta-net, fused-kernel, decode, prefill, quantization, flash-attention, mla, linear-attention, gated-dual-gemm, batched-gemv
 - **languages**: cuda-cpp, cute-dsl, triton, tilelang, cutile, ptx, python, jax-pallas
@@ -132,4 +146,4 @@ When asking about:
 
 ## Blackwell-First Scope
 
-Pages including `sm90` in `architectures` WITHOUT any `sm100*` variant MUST include a `blackwell_relevance:` field explaining why the Hopper content is kept. Enforced by validator.
+Pages including `sm90` in `architectures` without any Blackwell target (`sm100*`, `sm103*`, or `sm120`) must include a `blackwell_relevance:` field explaining why the Hopper content is kept. Enforced by validator.

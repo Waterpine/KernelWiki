@@ -67,7 +67,7 @@ python3 scripts/grep_wiki.py "nvfp4" "block_scale" --any
 Auto-generated under `queries/`:
 
 - `queries/by-problem.md` — symptom → pattern page → candidate techniques
-- `queries/by-technique.md` — 15 techniques with architectures, confidence, reproducibility, source count
+- `queries/by-technique.md` — 17 techniques with architectures, confidence, reproducibility, source count
 - `queries/by-hardware-feature.md` — tcgen05/tmem/clc/tma/nvfp4/etc. → related wiki + PR pages
 - `queries/by-kernel-type.md` — gemm/attention/moe/mla/gated-delta-net → pages
 - `queries/by-language.md` — cute-dsl/cuda-cpp/ptx/triton → guide page + related kernels/sources
@@ -100,13 +100,13 @@ When answering from this KB:
 - **Hybrid version-claim registry** — per-page `version_sensitive: <id>` pointers + `data/version-claims.yaml` central registry, validated for bidirectional consistency
 - **Status script** `scripts/repo_status.py` — current corpus counts
 - **Validator** `scripts/validate.py` — schema, link, artifact, and ledger checks
-- **Blackwell-first** — SM90 pages only appear when they carry explicit `blackwell_relevance`
+- **Blackwell-first** — Hopper-only wiki pages carry explicit `blackwell_relevance`; mixed SM90/SM100 pages are inherently in scope
 
 To refresh the corpus: run `scripts/refresh_candidate_ledger.py`, regenerate PR pages and query indices, then validate.
 
 ## Quality Guarantees
 
 - Every `verified` page has official-doc + upstream-code evidence
-- Every technique/kernel/language page has a compilable snippet
+- Every technique/kernel/language page has a structurally checked code fragment; only `runnable` means self-contained and buildable
 - Every PR page has `inclusion_reason` and `status: merged`
-- All Hopper-inclusive pages have explicit `blackwell_relevance`
+- All Hopper-only wiki pages have explicit `blackwell_relevance`

@@ -7,7 +7,7 @@
 > For bug reports, feature requests, and discussions, please use the main KDA repository:
 > https://github.com/mit-han-lab/kernel-design-agents
 
-> **Last repository update: 2026-06-09.** Information after this date is not included in KernelWiki yet.
+> **Last factual refresh: 2026-08-13.** Claims marked current were checked against sources available on that date.
 
 A structured knowledge base of NVIDIA Blackwell (SM100, B200) and Hopper (SM90, H100) GPU kernel optimization, packaged as a Claude Code skill. The repository root **is** the skill directory — clone it directly into `~/.claude/skills/` and it works out of the box.
 
@@ -39,7 +39,10 @@ export BLACKWELL_WIKI_ROOT=/path/to/KernelWiki
 - Source PR pages, synthesized wiki pages, blog/doc/contest summaries, candidate ledgers, query indices, and artifact bundles.
 - Verbatim/extracted/derived asset bundles under `artifacts/` (PR diffs, kernel files, blog code) — pinned to upstream SHAs via `PROVENANCE.yaml`.
 - Auto-generated cross-reference indices — by problem / technique / hardware feature / repo / kernel type / language.
-- Reviewed candidate ledgers with include/defer/exclude decisions.
+- Reviewed candidate-ledger snapshots with include/defer/exclude decisions.
+  Included rows must resolve to a generated page or an explicit skip record;
+  older retained pages can predate the current ledger snapshot or remain after
+  a later review changes their decision.
 - **Hybrid version-claim registry** ([`data/version-claims.yaml`](data/version-claims.yaml)) — per-page `version_sensitive: <id>` pointers + central registry, validated for bidirectional consistency
 - Run `python3 scripts/repo_status.py` for current corpus counts.
 
@@ -114,13 +117,13 @@ python3 scripts/generate-indices.py    # regenerate query indices
 - `scripts/repo_size_check.py` enforces the repository size budget
 - 0 broken links across all internal references
 - All `verified` wiki pages have official-doc + upstream-code evidence (enforced by `evidence_basis` field)
-- All technique/kernel/language pages have compilable code snippets (`reproducibility >= snippet`)
-- All Hopper-inclusive pages explain their `blackwell_relevance`
+- All technique/kernel/language pages have structurally checked code fragments (`reproducibility >= snippet`); only `runnable` claims a self-contained build
+- Hopper-only wiki pages explain their `blackwell_relevance`
 - Version-sensitive claims (Triton 3.6, CUTLASS 4.5, etc.) carry `version_sensitive: <id>` pointers resolving to the central registry
 
 ## Scope Rules
 
-- **Blackwell-first** — SM100 content is primary. SM90 requires explicit `blackwell_relevance` field.
+- **Blackwell-first** — SM100 content is primary. Hopper-only wiki pages require an explicit `blackwell_relevance` field; mixed SM90/SM100 pages are already Blackwell-relevant.
 - **Kernel-only** — No distributed-system topics (DeepEP, DualPipe, EPLB are out of scope).
 - **English canonical** — All content in English.
 - **First-class DSLs** — CuTe DSL, CUDA C++, PTX, Triton. TileLang / cuTile / JAX-Pallas mentioned but no dedicated guides.
@@ -154,7 +157,7 @@ KernelWiki/                             (= ~/.claude/skills/KernelWiki/)
 │   ├── tags.yaml
 │   └── aliases.yaml
 │
-├── candidates/                        # Reviewed PR ledgers (ingestion source of truth)
+├── candidates/                        # Reviewed PR candidate snapshots and decisions
 │   ├── cutlass.yaml
 │   ├── sglang.yaml
 │   ├── vllm.yaml

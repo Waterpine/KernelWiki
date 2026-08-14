@@ -2,9 +2,10 @@
 ## Consumed by scripts/compute_core_prs.py
 ##
 ## Two separate lanes (CuTe DSL and Triton) are classified with different
-## criteria because Triton on SM100 has no direct tcgen05/TMEM access
-## (see wiki/languages/triton-blackwell.md), so Triton's useful scope is
-## narrower than CuTe DSL's.
+## criteria. Triton 3.6+ is the conservative supported-policy baseline for
+## native SM100 paths, although official 3.4/3.5 notes already record Blackwell
+## TMEM/tcgen05 and warp-specialization work. The downstream scope captured here is narrower than CuTe DSL's;
+## see the versioned rationale in the triton.description block below.
 
 cute-dsl:
   description: |
@@ -62,10 +63,13 @@ cute-dsl:
 
 triton:
   description: |
-    Triton is a scoped Blackwell lane. As of Triton 3.6 (released
-    2026-01-21), Triton has native SM100 lowering through tcgen05 + TMEM
-    via descriptor/TMA + warp_specialize, tl.dot_scaled, and Gluon
-    multi-CTA / 2CTA, but production peak-performance leadership for
+    Triton is a scoped Blackwell lane. Official 3.4 and 3.5 releases already
+    contained Blackwell TMEM/tcgen05 lowering and automatic warp-specialization
+    work. Triton 3.6 (released 2026-01-21) is this policy's conservative floor
+    for the expanded combination of descriptor/TMA + warp_specialize,
+    tl.dot_scaled, and Gluon multi-CTA / 2CTA; current stable 3.7.1 retains and
+    hardens these paths.
+    Production peak-performance leadership for
     compute-bound matmul/attention on Blackwell still favors hand-written
     CuTe-DSL / CUTLASS / FA-4 / TRT-LLM kernels for many workloads
     (downstream evidence: pr-sglang-5390 measured CUTLASS tcgen05_mla

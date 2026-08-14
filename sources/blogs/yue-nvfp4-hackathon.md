@@ -29,8 +29,7 @@ languages:
 - cuda-cpp
 - ptx
 - cute-dsl
-retrieved_at: 2026-04-16
-artifact_dir: artifacts/blogs/yue-nvfp4-hackathon/code
+retrieved_at: 2026-08-14
 ---
 
 # Blackwell NVFP4 Kernel Hackathon Journey (Yue Zhang)
@@ -43,12 +42,14 @@ Yue Zhang's detailed account of optimizing Problem 1 (NVFP4 Batched GEMV) in the
 
 | Stage | Approach | Latency | Improvement |
 |-------|----------|---------|-------------|
-| 1 | CuTe DSL baseline | ~100us | -- |
-| 2 | Naive CUDA (coalesced access) | ~443us | (worse than CuTe initially) |
-| 3 | Hardware intrinsics | ~39us | 11.4x from stage 2 |
-| 4 | PTX assembly | ~27us | 1.44x from stage 3 |
-| 5 | ILP optimization | ~22.9us | 1.18x from stage 4 |
-| 6 | Final tuned | 22.392us | 4.5x from stage 1 |
+| 1 | CuTe DSL template | ~100us | -- |
+| 2 | Optimized CuTe DSL | ~33us | ~3.0x from the template |
+| 3 | Naive CUDA | ~2000us | separate CUDA starting point |
+| 4 | Coalesced access + thread collaboration + warp reduction | ~443us | ~4.5x from naive CUDA |
+| 5 | Vector loads + hardware intrinsics, without shared memory | ~39us | ~11.4x from 443us |
+| 6 | PTX assembly | ~27us | ~1.44x from 39us |
+| 7 | ILP optimization | ~22.9us | ~1.18x from 27us |
+| 8 | Aggressive PTX fusion / final submission | ~22.3us / 22.392us | author-reported final |
 
 Key observation: The initial naive CUDA attempt was slower than CuTe DSL, demonstrating that manual optimization requires deep understanding of the hardware to outperform a well-designed DSL.
 
@@ -56,6 +57,7 @@ Key observation: The initial naive CUDA attempt was slower than CuTe DSL, demons
 
 ### Step 1: CuTe DSL Baseline (~100us)
 
+<!-- extract-skip: conceptual summary, not a verbatim block from the author post -->
 ```cpp
 // CuTe DSL approach:
 // - Automatic partition/copy for NVFP4 data
@@ -66,10 +68,13 @@ Key observation: The initial naive CUDA attempt was slower than CuTe DSL, demons
 
 CuTe DSL provided a functional baseline without requiring deep hardware knowledge, but left significant performance on the table for this memory-bound kernel.
 
-### Step 2: Coalesced Memory Access (~443us, then improved)
+### Step 2: Naive CUDA to Coalesced Collaboration (2000us to ~443us)
 
-Initial hand-written CUDA was actually slower because the memory access pattern was not properly coalesced:
+The initial hand-written CUDA implementation measured about 2000us. Adding
+coalesced access, multiple collaborating threads per row, and a warp reduction
+brought it to about 443us:
 
+<!-- extract-skip: conceptual summary, not a verbatim block from the author post -->
 ```cpp
 // Bad: each thread reads non-contiguous FP4 elements
 // Good: threads in a warp read contiguous 128-byte chunks
@@ -83,20 +88,24 @@ After fixing coalescing, performance improved dramatically but still required ha
 
 Replaced generic type conversions with NVIDIA FP4 hardware intrinsics:
 
+<!-- extract-skip: conceptual summary, not a verbatim block from the author post -->
 ```cpp
 // Generic: manual bit manipulation for FP4 -> FP16 conversion
 // float val = decode_fp4_manual(packed_byte >> 4);  // slow
 
 // Hardware intrinsic: single instruction for FP4 -> FP16x2
-// __half2 result = __cvt_fp4x2_to_halfx2(packed_fp4);  // fast
+// __half2_raw result = __nv_cvt_fp4x2_to_halfraw2(packed_fp4, __NV_E2M1);
 ```
 
-The hardware intrinsic path is 11.4x faster than the manual approach, demonstrating the importance of using ISA-specific instructions for sub-byte data types.
+Removing shared memory, adding vectorized loads, and using the hardware
+intrinsics together produced the reported 443us-to-39us change. The post does
+not isolate that 11.4x ratio as the effect of the conversion intrinsic alone.
 
 ### Step 4: PTX Assembly (~27us)
 
 Dropped to raw PTX for fine-grained control:
 
+<!-- extract-skip: schematic subset, not a verbatim block from the author post -->
 ```asm
 // Key PTX optimizations:
 // 1. cvt.rn.f16x2.e2m1x2 for FP4 conversion (vs C intrinsic)
@@ -117,6 +126,7 @@ The PTX byte unpacking (`mov.b32 {a,b,c,d}`) is a critical optimization: it repl
 
 Increased instruction-level parallelism by unrolling and interleaving independent operations:
 
+<!-- extract-skip: conceptual summary, not a verbatim block from the author post -->
 ```cpp
 // Before: sequential FP4 decode + accumulate
 for (int k = 0; k < K; k += 16) {

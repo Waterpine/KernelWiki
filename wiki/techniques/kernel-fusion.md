@@ -9,47 +9,38 @@ reproducibility: snippet
 prerequisites: [hw-tmem]
 related: [kernel-fused-moe, kernel-nvfp4-gemm, technique-epilogue-fusion]
 sources: [contest-gpumode-p3, contest-flashinfer-track-a, blog-tflops-gap-fp4-moe]
-blackwell_relevance: "TMEM enables multi-accumulator fusion (gate+up dual GEMM) without register pressure; technique valuable on both architectures."
+blackwell_relevance: "Blackwell TMEM and tensor-core instructions can support fused GEMM/epilogue designs, subject to the instruction's legal allocation and synchronization rules."
 ---
 
 # Kernel Fusion
 
 ## Overview
 
-Kernel fusion combines multiple operations into a single kernel launch, eliminating intermediate global memory roundtrips. Critical for MoE and attention pipelines where 5-7 sequential launches each incur latency, synchronization, and memory traffic overhead.
+Kernel fusion keeps producer results on chip when a consumer can execute in the same launch. It can reduce launch overhead, global-memory traffic, and intervening synchronization. The benefit depends on tensor shapes and on whether fusion lowers occupancy or introduces redundant computation.
 
-## Examples
+## Common Forms
 
-### Fused Gate-Up Dual GEMM + SwiGLU
-```cuda
-// Instead of: gate_gemm → up_gemm → silu → multiply (4 kernels)
-// Fused: single kernel with two TMEM accumulators
-__global__ void fused_gate_up_silu(...) {
-    uint32_t tmem_gate = tmem_alloc(256);
-    uint32_t tmem_up = tmem_alloc(256);
+- fuse an activation, scaling operation, bias, or quantization step into a GEMM epilogue;
+- compute gate and up projections in one scheduled kernel, then apply the gated activation;
+- combine routing, permutation, or reduction stages when their ownership and synchronization can be expressed safely.
 
-    for (int k = 0; k < K; k += BLOCK_K) {
-        tcgen05_mma(x_smem, w_gate_smem, tmem_gate);
-        tcgen05_mma(x_smem, w_up_smem, tmem_up);
-    }
-
-    float g = tmem_load(tmem_gate);
-    float u = tmem_load(tmem_up);
-    output = (g / (1.0f + expf(-g))) * u;  // SwiGLU fused
-}
+```python
+def fused_bias_activation(x, weight, bias):
+    accumulator = matmul(x, weight)
+    accumulator = accumulator + bias
+    return activation(accumulator)
 ```
 
-### MoE Fusion Progression
-- **vLLM (7 kernels)**: softmax → topk → dispatch → gate → up → silu_mul → down+combine
-- **SGLang (5 kernels)**: router+topk → dispatch → fused gate-up-silu → down → combine
-- **Ideal (1-2 kernels)**: all ops in one launch, saves 21.9% activation memory traffic
+This mathematical sketch shows the eliminated intermediate, not a CUDA implementation.
+
+On SM100, TMEM accumulators are allocated in documented power-of-two column units by a warp collectively. Their lifetime must include the required MMA completion mechanism, loads, `tcgen05.wait::ld`, and deallocation. A C-like call such as `tmem_alloc(256)` or `tcgen05_mma(...)` is only pseudocode unless it names a real wrapper with those semantics.
 
 ## Constraints
 
-- TMEM capacity limits how many accumulators can fuse (256 cols total)
-- Register pressure on epilogue if fusing complex activations
-- Fusion opportunities depend on dataflow shape (dependency graph must be DAG-compatible with CTA scope)
+- register, shared-memory, and TMEM demand can reduce residency;
+- CTA-local synchronization cannot satisfy a dependency between unrelated CTAs;
+- a fused epilogue may become the critical path or limit vectorized stores;
+- numerical ordering can change, especially for reductions and quantization;
+- the best launch boundary varies with batch size, expert distribution, and framework overhead.
 
-## Related
-- [fused-moe](../kernels/fused-moe.md)
-- [epilogue-fusion](epilogue-fusion.md)
+Counts such as "seven kernels to one" and fixed traffic savings are implementation-specific measurements, not properties of MoE fusion in general. Preserve them only with a pinned benchmark, exact shapes, hardware, software, and baseline.

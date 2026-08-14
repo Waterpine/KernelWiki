@@ -270,11 +270,11 @@ def apply_triton_policy(policy, pr):
     # Skip pure Hopper
     if archs and archs.issubset({"sm90", "sm90a"}):
         return False, "pure Hopper Triton (no SM100 relevance)"
-    # R30: skip non-Blackwell-vendor Triton PRs. pytorch/pytorch tags
-    # many Triton PRs with `architectures: [sm100]` because the Triton
-    # backend has SM100 support generally, even when the PR itself is
-    # scoped to a different GPU backend (ROCm / AMD / Intel GPU / XPU /
-    # HIP / MPS / CPU). Concrete examples:
+    # R30: skip non-Blackwell-vendor Triton PRs. This remains a defense in
+    # depth even though source-PR architecture tags are now evidence-derived:
+    # a PR can mention SM100 comparatively while still being scoped to a
+    # different GPU backend (ROCm / AMD / Intel GPU / XPU / HIP / MPS / CPU).
+    # Concrete examples:
     #   pr-pytorch-170190: "[ROCm] Enable shared memory based pruning..."
     #   pr-pytorch-163388: "[Inductor][Intel GPU] Save threads_per_warp..."
     # The convention is `[<Vendor>]` prefix in the PR title. Match

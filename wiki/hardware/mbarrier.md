@@ -4,9 +4,14 @@ title: "mbarrier (Memory Barrier Primitives)"
 type: hardware
 architectures: [sm100, sm100a, sm90, sm90a]
 tags: [mbarrier, tma]
-confidence: source-reported
+confidence: verified
+evidence_basis:
+  - source_id: doc-ptx-isa-sm100
+    evidence_type: official-doc
+  - source_id: pr-cutlass-2139
+    evidence_type: upstream-code
 related: [hw-tma, hw-tcgen05-mma, technique-warp-specialization, technique-pipeline-stages]
-sources: [doc-ptx-isa-sm100, blog-tcgen05-tutorial, doc-nvidia-tuning-guide]
+sources: [doc-ptx-isa-sm100, pr-cutlass-2139, blog-tcgen05-tutorial, doc-nvidia-tuning-guide]
 aliases: [mbarrier, "memory barrier", "mbar"]
 blackwell_relevance: "mbarrier is the primary synchronization primitive between TMA producers and tcgen05 consumers on Blackwell. Phase/parity tracking critical for pipelined kernels."
 ---
@@ -15,7 +20,7 @@ blackwell_relevance: "mbarrier is the primary synchronization primitive between 
 
 ## Overview
 
-mbarriers are 64-bit shared memory primitives used for producer/consumer synchronization between asynchronous hardware units (TMA, tcgen05) and SM threads. Introduced on Hopper, essential for Blackwell warp-specialized kernels.
+mbarriers are 64-bit shared-memory barrier objects used for phase-based producer/consumer synchronization. TMA and `tcgen05.commit` can signal completion through an mbarrier; a bare `tcgen05.mma` does not automatically arrive on one.
 
 ## Key Operations
 
@@ -41,13 +46,13 @@ mbarrier.try_wait.parity.shared.b64 p, [mbar_addr], phase;
 mbarriers have a 1-bit **phase** that flips each time the arrival count reaches zero. Consumers track their expected phase and wait for it:
 
 ```cuda
-int phase = 0;
+int phase[NUM_STAGES] = {0};
 for (int k = 0; k < num_iterations; k++) {
     int stage = k % NUM_STAGES;
 
     // Wait for this stage's producer to complete
-    mbarrier_wait_parity(&mbar[stage], phase);
-    phase ^= 1;  // Flip for next use of this stage slot
+    mbarrier_wait_parity(&mbar[stage], phase[stage]);
+    phase[stage] ^= 1;  // Flip when this particular stage slot is reused
 
     // Use data...
     consume_data(stage);
@@ -71,15 +76,16 @@ if (lane_id == 0) {
     cp_async_bulk_tensor_2d(smem_A[stage], global_desc, x, y, &mbar[stage]);
     cp_async_bulk_tensor_2d(smem_B[stage], global_desc, x, y, &mbar[stage]);
 }
-// Do NOT manually arrive after TMA issue - it races with hardware
+// Do not add an unrelated arrival that advances this phase early.
 ```
 
 ## Pitfalls
 
 1. **Missing phase flip**: Reusing a stage slot without flipping parity causes stale arrivals to satisfy the new wait
 2. **Mismatched init count**: If consumer expects N arrivals but producers only arrive M times, barrier never fires
-3. **Manual arrive after async issue**: TMA/tcgen05 hardware arrives on completion — extra manual arrive causes double-count
-4. **Cross-cluster mbarriers**: Use `shared::cluster` qualifier for cluster-level sync (2-SM cooperative MMA)
+3. **Wrong completion source**: TMA uses the copy's complete-tx mechanism; tcgen05 MMA completion requires `tcgen05.commit` targeting the barrier
+4. **Extra arrival**: an arrival not included in the designed arrival/transaction counts can advance a phase early
+5. **Wrong scope/state space**: CTA-local and cluster-shared protocols have different address, scope, and proxy-fence requirements
 
 ## Related
 - [TMA](tma.md) — Primary producer for mbarriers

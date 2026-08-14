@@ -83,6 +83,8 @@ _ENV_ERROR_HINTS = (
     "you must authenticate",
     "you are not logged in",
     "not logged into",
+    "gh auth login",
+    "gh_token",
     "bad credentials",
     "token expired",
     "sso enforcement",

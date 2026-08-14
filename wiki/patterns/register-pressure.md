@@ -6,42 +6,22 @@ tags: [tmem, register-reuse, warp-specialization]
 symptoms: [register-pressure, low-occupancy, register-spilling]
 candidate_techniques: [hw-tmem, technique-warp-specialization, migration-register-to-tmem]
 related: [pattern-compute-bound, hw-tmem]
-sources: [doc-nvidia-tuning-guide, blog-tcgen05-tutorial, pr-vllm-16032]
+sources: [doc-ptx-isa-sm100, doc-nvidia-tuning-guide, blog-tcgen05-tutorial, pr-vllm-16032]
 ---
 
-## Symptom
+## Diagnosis
 
-Occupancy below target due to high register usage per thread. Nsight Compute shows register spilling to local memory.
+Use compiler resource output and profiler counters to separate register-limited
+residency from spills and long live ranges. Desired occupancy depends on the
+kernel; lower occupancy can still be sufficient when each warp exposes enough
+independent work.
 
-## Likely Causes
+TMEM moves supported tcgen05 destinations out of distributed accumulator
+registers, but the epilogue must load fragments into registers and other state
+remains. It does not free a fixed 128 registers per thread or guarantee another
+resident CTA.
 
-1. **Accumulator registers**: On Hopper, large MMA tiles consume many registers for accumulators
-2. **Epilogue state**: Data transformation in epilogue requires additional registers
-3. **Complex control flow**: Many live variables across branches
-
-## Candidate Techniques
-
-| Technique | Applicability | Effect |
-|---|---|---|
-| [TMEM](../hardware/tmem.md) | SM100 only | Moves accumulators to dedicated 256KB memory |
-| [Warp specialization](../techniques/warp-specialization.md) | SM100+ | Different warps handle different roles, reducing per-warp register needs |
-| [Register-to-TMEM migration](../migration/register-to-tmem.md) | SM90→SM100 | Systematic approach to moving accumulators off registers |
-
-## Blackwell Solution
-
-```
-// Hopper: 64×256 MMA tile accumulator = 64*256*4 bytes in registers per warp group
-//   → ~128 registers per thread just for accumulators
-//
-// Blackwell: TMEM holds accumulators
-//   → 0 registers for accumulators
-//   → ~128 registers freed for other work or higher occupancy
-//
-// TMEM: 256 KB per SM, 128 rows × 512 columns × 32-bit
-// Largest 1-SM MMA uses half → double-buffering possible
-```
-
-## Caveats
-- TMEM only available on SM100 datacenter (not SM120 consumer)
-- TMEM requires explicit alloc/dealloc lifecycle
-- TMEM→register transfer adds latency (offset by freeing registers)
+Possible changes include shortening live ranges, splitting roles, reducing
+unrolling, moving eligible accumulator storage to TMEM, or accepting lower
+occupancy to avoid spills. Validate both correctness and runtime after each
+change.

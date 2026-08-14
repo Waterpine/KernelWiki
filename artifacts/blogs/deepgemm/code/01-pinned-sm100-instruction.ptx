@@ -1,0 +1,7 @@
+// Extracted from sources/blogs/deepgemm.md by scripts/extract_blog_code.py
+// Heading: ## Pinned SM100 instruction
+// Original fence language: ptx
+// See artifacts/blogs/deepgemm/code/PROVENANCE.yaml for origin + license metadata.
+
+tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale
+    [d], a_desc, b_desc, idesc, [a_sf_tmem], [b_sf_tmem], p;

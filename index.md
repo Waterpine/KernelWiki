@@ -45,15 +45,15 @@ See [references/examples.md](references/examples.md) for 10 worked query pattern
 - [technique-tile-scheduling](wiki/techniques/tile-scheduling.md) — Tile scheduling strategies
 - [technique-double-buffering](wiki/techniques/double-buffering.md) — Double/multi-buffering
 - [technique-software-exp](wiki/techniques/software-exp.md) — Software-emulated exponential
-- [technique-fine-grained-quant](wiki/techniques/fine-grained-quantization.md) — Fine-grained FP8/FP4 quantization
+- [technique-fine-grained-quantization](wiki/techniques/fine-grained-quantization.md) — Fine-grained FP8/FP4 quantization
 - [technique-vectorized-loads](wiki/techniques/vectorized-loads.md) — Wide vectorized loads and cache policies
 
 ## Kernel Case Studies
 
-- [kernel-flash-attention-4](wiki/kernels/flash-attention-4.md) — FlashAttention-4 (1605 TFLOPS on B200)
-- [kernel-deepgemm](wiki/kernels/deepgemm.md) — DeepGEMM FP8 GEMM (1550 TFLOPS on H800)
+- [kernel-flash-attention-4](wiki/kernels/flash-attention-4.md) — FlashAttention-4 (up to 1613 TFLOPS on the paper's B200 BF16 sweep)
+- [kernel-deepgemm](wiki/kernels/deepgemm.md) — DeepGEMM FP8 GEMM (upstream-reported maximum of 1550 TFLOPS on H800, April 2025 snapshot)
 - [kernel-flashmla](wiki/kernels/flashmla.md) — FlashMLA sparse/dense MLA decoding
-- [kernel-nsa](wiki/kernels/nsa.md) — Native Sparse Attention (9x fwd speedup)
+- [kernel-nsa](wiki/kernels/nsa.md) — Native Sparse Attention (paper-reported 9x forward speedup at 64K on eight A100 GPUs versus its FlashAttention-2 baseline)
 - [kernel-gated-delta-net](wiki/kernels/gated-delta-net.md) — Gated Delta Net linear attention
 - [kernel-nvfp4-gemm](wiki/kernels/nvfp4-gemm.md) — NVFP4 GEMM from GPU Mode hackathon
 - [kernel-nvfp4-gemv](wiki/kernels/nvfp4-gemv.md) — NVFP4 batched GEMV optimization

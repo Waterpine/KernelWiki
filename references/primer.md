@@ -17,10 +17,10 @@ All page IDs below resolve via `get_page.py <id>`. All paths are relative to the
 |---|---|---|---|
 | tcgen05 MMA instruction | `hw-tcgen05-mma` | `wiki/hardware/tcgen05-mma.md` | Blackwell tensor core instruction; replaces wgmma. CTA-scope (`cta_group::1`) or cluster-scope (`cta_group::2`). |
 | Tensor Memory (TMEM) | `hw-tmem` | `wiki/hardware/tmem.md` | 256 KB/SM dedicated accumulator storage; 128 rows × 512 cols (32-bit); allocated via `tcgen05.alloc`. |
-| Cluster Launch Control (CLC) | `hw-clc` | `wiki/hardware/clc.md` | Hardware work queue for persistent kernels; `clusterlaunchcontrol.try_cancel` for speculative workloads. |
+| Cluster Launch Control (CLC) | `hw-clc` | `wiki/hardware/clc.md` | Cancellation-based work stealing: `try_cancel` claims a not-yet-launched CTA/cluster ID. |
 | Tensor Memory Accelerator (TMA) | `hw-tma` | `wiki/hardware/tma.md` | Async bulk load/store (`cp.async.bulk.tensor`), multicast across cluster. |
 | 2-SM Cooperative MMA | `hw-2sm-cooperative` | `wiki/hardware/2sm-cooperative.md` | `cta_group::2` — two CTAs in one cluster cooperate on a single MMA. |
-| NVFP4 / block-scaled FP | `hw-nvfp4` | `wiki/hardware/nvfp4.md` | E2M1 data + FP8 (UE8M0) block scale per 16 elements. |
+| NVFP4 / block-scaled FP | `hw-nvfp4` | `wiki/hardware/nvfp4.md` | E2M1 data + E4M3/UE4M3 block scale per 16 elements; distinct from MXFP4/UE8M0. |
 | PDL / GDC | `hw-pdl-gdc` | `wiki/hardware/pdl-gdc.md` | Programmatic Dependent Launch and Grid Dependency Control — overlap successive kernel launches. |
 | mbarrier primitives | `hw-mbarrier` | `wiki/hardware/mbarrier.md` | Shared-memory barriers with phase tracking; the glue between TMA/tcgen05/warps. |
 
@@ -30,14 +30,14 @@ All page IDs below resolve via `get_page.py <id>`. All paths are relative to the
 
 | Technique | Page ID | When to use |
 |---|---|---|
-| Warp specialization | `technique-warp-specialization` | Every nontrivial Blackwell kernel. Assign MMA / epilogue / TMA roles to different warps. |
-| Persistent kernels with CLC | `technique-persistent-kernels` | GEMM-like workloads with many tiles; eliminates launch overhead and tail effects. |
+| Warp specialization | `technique-warp-specialization` | When overlapping producer, MMA, and epilogue roles offsets the synchronization and resource cost. |
+| Persistent kernels with CLC | `technique-persistent-kernels` | When cancellation-backed work stealing can reduce a last wave or uneven worker availability. |
 | Ping-pong scheduling | `technique-ping-pong-scheduling` | Attention / back-to-back GEMMs; overlap two tiles by alternating SMEM buffers. |
 | Epilogue fusion | `technique-epilogue-fusion` | Fuse scale/bias/activation/quantize into the same kernel using TMEM-to-register epilogue warps. |
-| Software pipelining | `technique-pipeline-stages` | Multi-stage TMA→MMA overlap; typically 3–5 stages. |
+| Software pipelining | `technique-pipeline-stages` | Multi-stage TMA→MMA overlap; choose depth from resource use and measurement. |
 | Shared memory swizzling | `technique-swizzling` | Eliminate SMEM bank conflicts on A/B tile loads. |
 | Fine-grained FP8/FP4 quantization | `technique-fine-grained-quantization` | Per-tile or per-block scaling to preserve accuracy under aggressive quantization. |
-| Tile scheduling | `technique-tile-scheduling` | L2 locality, cluster reordering, CLC swizzle patterns. |
+| Tile scheduling | `technique-tile-scheduling` | Software raster/swizzle mapping, persistence, and optional CLC work stealing. |
 | Double/multi-buffering | `technique-double-buffering` | Classical approach; overlaps load with compute, extends to 3+ stages. |
 | Software-emulated exp | `technique-software-exp` | FlashAttention softmax; cheaper than the hardware `ex2` path in specific regimes. |
 | Register budgeting | `technique-register-budgeting` | Raise occupancy when MMA warp counts are tight. |
@@ -52,17 +52,17 @@ All page IDs below resolve via `get_page.py <id>`. All paths are relative to the
 
 | Kernel | Page ID | Headline perf | Key techniques |
 |---|---|---|---|
-| FlashAttention-4 | `kernel-flash-attention-4` | 1605 TFLOPS B200 BF16 (~71%) | Ping-pong scheduling, software exp, 2-CTA backward |
+| FlashAttention-4 | `kernel-flash-attention-4` | Up to 1613 TFLOPS on the paper's B200 BF16 sweep (~71%) | Ping-pong scheduling, selective software exp, 2-CTA backward |
 | DeepGEMM (FP8) | `kernel-deepgemm` | ~1550 TFLOPS H800 FP8 | Fine-grained scaling, CUDA-core promotion (Nc=128) |
-| NVFP4 GEMM | `kernel-nvfp4-gemm` | ≈ cuBLAS FP4 on B200 | tcgen05 + UE8M0 block scales |
-| NVFP4 batched GEMV | `kernel-nvfp4-gemv` | 2000 µs → 22.4 µs | Memory-bound tricks, cache policy, register budgeting |
+| NVFP4 GEMM | `kernel-nvfp4-gemm` | No verified numeric claim retained | `mxf4nvf4` + block-16 E4M3/UE4M3 scales |
+| NVFP4 batched GEMV | `kernel-nvfp4-gemv` | Participant-reported contest progression only | Memory-bound experiments, cache policy, register budgeting |
 | FP8 block-scale GEMM | `kernel-fp8-block-scale-gemm` | — | 1×128 / 128×128 block scaling scheme |
 | Fused MoE | `kernel-fused-moe` | — | Gate-up fused with SwiGLU; FP8 block scale routing |
 | Gated Dual GEMM | `kernel-gated-dual-gemm` | — | Gate × Up → SiLU fused in epilogue |
 | Grouped GEMM for MoE | `kernel-grouped-gemm` | — | Variable-sized expert GEMMs in one launch |
 | FlashMLA | `kernel-flashmla` | DeepSeek V3 decode | MLA-specific TMA + tcgen05 layout |
 | Sparse MLA | `kernel-sparse-mla` | DeepSeek V3.2 | Sparse KV retrieval before MLA core |
-| Native Sparse Attention (NSA) | `kernel-nsa` | 9× fwd speedup | Block-sparse + compressed attention |
+| Native Sparse Attention (NSA) | `kernel-nsa` | Up to 9× forward in the paper's A100 setup | Block-sparse + compressed attention |
 | Gated Delta Net | `kernel-gated-delta-net` | — | Chunk parallelism; linear attention |
 
 ---
@@ -88,7 +88,7 @@ All page IDs below resolve via `get_page.py <id>`. All paths are relative to the
 | CuTe DSL | `lang-cute-dsl` | Preferred high-level path on SM100; native tcgen05/TMEM/CLC bindings. |
 | CUDA C++ | `lang-cuda-cpp` | PTX inline is common; used by CUTLASS, vLLM, SGLang custom kernels. |
 | PTX (SM100) | `lang-ptx` | `tcgen05.*`, `clusterlaunchcontrol.*`, `cp.async.bulk.tensor.*` — low-level control. |
-| Triton | `lang-triton` | On Blackwell: Triton 3.6+ ships native tcgen05 + TMEM lowering through descriptor/TMA + `tl.range(warp_specialize=True)`, `tl.dot_scaled`, and Gluon multi-CTA / 2CTA. Pre-3.6 the framing was "no tcgen05/TMEM exposure"; that historical context is preserved on the page. Cite via `version_sensitive: vs-triton-3.6-blackwell-tcgen05`. |
+| Triton | `lang-triton` | On Blackwell: official 3.4/3.5 notes already record TMEM/tcgen05 and automatic warp-specialization work. This repository uses 3.6+ as a conservative policy floor for the expanded descriptor/TMA, `tl.range(warp_specialize=True)`, `tl.dot_scaled`, and Gluon multi-CTA / 2CTA surface—not as the introduction point. Cite via `version_sensitive: vs-triton-3.6-blackwell-tcgen05`. |
 
 ---
 
@@ -127,7 +127,7 @@ Query by repo: `python3 scripts/query.py --repo <name>`.
 | GPU Mode NVFP4 Hackathon | `sources/contests/gpu-mode-nvfp4/` | `problem-1-gemv`, `problem-2-gemm`, `problem-3-gated-dual-gemm`, `problem-4-grouped-gemm` |
 | FlashInfer MLSys 2026 | `sources/contests/flashinfer-mlsys26/` | `track-a-fused-moe`, `track-b-sparse-attention`, `track-c-gated-delta-net` |
 
-Each contest page has a `submissions:` block listing rank-1/2/3 solutions with technique tags.
+The FlashInfer track pages record the final official winners. The GPU Mode pages retain only source-scoped submission information whose provenance is stated.
 
 ---
 
@@ -144,7 +144,8 @@ When the user types one of these, match to the canonical term shown:
 | 2-SM cooperative, two-SM cooperative, 2CTA, cta_group::2 | `2sm-cooperative` |
 | NVFP4, nv_float4, E2M1, FP4 E2M1 | `nvfp4` |
 | block scaling, UE8M0, microscaling, MX | `block-scale` |
-| Blackwell, B200, B100, GB200, GB300, SM100 | `sm100` |
+| Blackwell, B200, B100, GB200, SM100 | `sm100` |
+| Blackwell Ultra, B300, GB300, SM103 | `sm103` |
 | Hopper, H100, H200, H800, SM90 | `sm90` |
 | MoE, mixture of experts, expert parallelism | `moe` |
 | MLA, multi-head latent attention | `mla` |

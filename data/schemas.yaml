@@ -2,6 +2,8 @@
 ## Defines required and optional fields per page type.
 ## Consumed by scripts/validate.py
 
+# For generated source-PR pages, `date` is GitHub `created_at` as a UTC date,
+# not `merged_at` or `closed_at`.
 source-pr:
   required:
     - id
@@ -425,8 +427,13 @@ refresh-cutoff:
 ## identical query inputs.
 refresh-search-results:
   required:
+    - record_status
     - cutoff_date
     - repos
+  optional:
+    - notes
+  constraints:
+    record_status: "current | historical_partial"
   repo_schema:
     required:
       - repo_slug

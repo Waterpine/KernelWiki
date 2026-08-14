@@ -5,186 +5,101 @@ version_sensitive:
 
 # Worked Query Examples
 
-Concrete patterns showing how to translate a user question into a navigation path and synthesize an answer.
+These examples show navigation paths. Treat the linked source record—not the query page—as the authority for an instruction spelling, benchmark, or version claim.
 
----
+## Fast GEMM on B200
 
-## Example 1: "How do I write a fast GEMM kernel on B200?"
+1. Query `gemm` pages by architecture.
+2. Select the data format: FP8 block scale, NVFP4, or another documented contract.
+3. Read the matching kernel and hardware pages.
+4. Follow every performance claim to its pinned source and shape.
 
-**Navigation path**:
-1. `queries/by-kernel-type.md` → find `gemm` row → lists kernel pages
-2. Read `wiki/kernels/fp8-block-scale-gemm.md` and `wiki/kernels/nvfp4-gemm.md`
-3. Follow `sources:` to concrete PRs: `pr-cutlass-2139` (blockwise+groupwise GEMM), `pr-vllm-13798` (FP8 GEMM)
-4. For optimization path, read `wiki/techniques/warp-specialization.md`, `wiki/techniques/persistent-kernels.md`
-5. For progression, cite the tcgen05 tutorial (`sources/blogs/tcgen05-tutorial.md`): Naive 17% → Swizzling 46% → Pipelining 62% → Warp Spec 80% → 2-SM 86% → CLC 98%
-
-**Command**:
 ```bash
 python3 scripts/query.py --type kernel --tag gemm --architecture sm100
 ```
 
----
+The community tcgen05 tutorial records a progression for its own GEMM shapes. It is useful evidence about that implementation, not a canonical sequence of optimization percentages or a universal path to 98%.
 
-## Example 2: "My kernel has low SM utilization on B200"
+## Low SM utilization
 
-**Navigation path**:
-1. `queries/by-problem.md` → find "low-sm-utilization" row
-2. Pattern page: `wiki/patterns/low-sm-utilization.md`
-3. Candidate techniques: `technique-persistent-kernels`, `technique-tile-scheduling`, `hw-clc`
-4. Read the CLC page: `wiki/hardware/clc.md` for code example
-5. Cite: tcgen05 tutorial showed 86% → 98% with persistent + CLC
-
-**Command**:
 ```bash
 python3 scripts/query.py --symptom low-sm-utilization
 python3 scripts/get_page.py pattern-low-sm-utilization
 ```
 
----
+Use the pattern page to distinguish too little grid work, tail imbalance, dependency stalls, and resource-limited occupancy. CLC can cancel not-yet-started cluster work in a persistent scheduler; it is not a general work queue or a guaranteed utilization increase.
 
-## Example 3: "Where is tcgen05.mma used in CUTLASS?"
+## Find tcgen05 usage in CUTLASS
 
-**Navigation path**:
-1. `queries/by-hardware-feature.md` → find `tcgen05` row → lists all relevant pages
-2. `queries/by-repo.md` → NVIDIA/cutlass section → 32 PRs
-3. Cross-reference via tag filter
-
-**Command**:
 ```bash
 python3 scripts/query.py --tag tcgen05 --repo cutlass --limit 30
 python3 scripts/grep_wiki.py "tcgen05\\.mma" --only sources
 ```
 
-Tip: the `--tag` filter also accepts aliases, so `--tag UMMA` resolves to `tcgen05`.
+The `UMMA` alias resolves to `tcgen05`, but exact instruction forms must be checked against the pinned PTX ISA.
 
----
+## FlashAttention-4
 
-## Example 4: "Show me the FlashAttention-4 implementation details"
-
-**Navigation path**:
-1. Direct: `wiki/kernels/flash-attention-4.md`
-2. Performance: 1605 TFLOPS on B200 BF16 (71% utilization)
-3. Techniques used: ping-pong scheduling, software exp, 2-CTA backward
-4. Follow sources → `sources/docs/flash-attention-4.md` (paper), `sources/blogs/flash-attention-4.md` (Tri Dao blog)
-
-**Command**:
 ```bash
 python3 scripts/get_page.py kernel-flash-attention-4 --follow-sources
 ```
 
----
+The paper reports a maximum of 1613 TFLOP/s on its documented B200 BF16 sweep, about 71% of the theoretical maximum used by the paper. That maximum is not a single-shape guarantee. The page also distinguishes the hybrid software/hardware exponential strategy from a blanket software replacement.
 
-## Example 5: "What's the difference between Hopper wgmma and Blackwell tcgen05?"
+## Hopper WGMMA to Blackwell tcgen05
 
-**Navigation path**:
-1. `wiki/migration/wgmma-to-tcgen05.md` — dedicated migration guide with `blackwell_relevance` field
-2. `wiki/hardware/tcgen05-mma.md` — canonical reference for the new instruction
-3. Contrast with Hopper behavior implicit in the migration page
-
-**Command**:
 ```bash
 python3 scripts/get_page.py migration-wgmma-to-tcgen05
 python3 scripts/get_page.py hw-tcgen05-mma
 ```
 
----
+Check accumulator placement, issue scope, completion, TMEM allocation, and architecture-specific target compatibility separately; mnemonic substitution alone is not a migration.
 
-## Example 6: "How did teams in the GPU Mode NVFP4 Hackathon win?"
+## GPU Mode NVFP4 contest
 
-**Navigation path**:
-1. `sources/contests/gpu-mode-nvfp4/` (4 problems)
-2. Each problem page has `submissions:` with rank 1/2/3 techniques
-3. Read participant blogs: `sources/blogs/yue-nvfp4-hackathon.md`, `sources/blogs/amandeep-nvfp4-attempts.md`, `sources/blogs/simon-nvfp4-gemv.md`
-4. Techniques: PTX-level control, cache policy differentiation, register budgeting
-
-**Command**:
 ```bash
 python3 scripts/query.py --type contest --tag nvfp4
 python3 scripts/get_page.py contest-gpumode-p1
 ```
 
----
+Participant timings and optimization progressions are source-reported contest results. Preserve the cited shape, harness, and access date and do not convert them into general B200 limits.
 
-## Example 7: "Write a Triton kernel for GatedDeltaNet decode on Blackwell"
+## Gated Delta Net on Blackwell
 
-**Navigation path**:
-1. `wiki/kernels/gated-delta-net.md` — conceptual + code
-2. `wiki/languages/triton-blackwell.md` — current Triton 3.6+ Blackwell lowering surfaces (tcgen05 + TMEM via descriptor/TMA + warp_specialize, `tl.dot_scaled`, Gluon multi-CTA); pre-3.6 historical context preserved in a clearly-marked subsection
-3. Source PRs: `pr-vllm-*` for gated_delta, FlashInfer GDN kernels
-
-**Command**:
 ```bash
 python3 scripts/query.py "gated delta net decode" --language triton
 ```
 
----
+The canonical page explains the recurrence and chunk-boundary dependency. Use its artifact bundle or a pinned upstream implementation; its conceptual pseudocode is not presented as a drop-in Triton kernel.
 
-## Example 8: "What are the memory-bound kernel optimization tricks on B200?"
+## Memory-bound kernels
 
-**Navigation path**:
-1. `wiki/patterns/memory-bound.md` — candidate techniques list
-2. `wiki/techniques/vectorized-loads.md` — wide loads + cache policies (covers `evict_first` / `no_allocate`)
-3. Best case study: `wiki/kernels/nvfp4-gemv.md` (2000μs → 22.4μs progression)
-
-**Command**:
 ```bash
 python3 scripts/query.py --symptom memory-bound
 ```
 
----
+Vector width, cache hints, and occupancy are candidates to measure. Participant-reported NVFP4 GEMV timings apply only to their contest configurations.
 
-## Example 9: "Find all FlashInfer PRs for FP8 MoE"
+## FlashInfer PRs for FP8 MoE
 
-**Command**:
 ```bash
 python3 scripts/query.py --repo flashinfer --tag moe --limit 30
 python3 scripts/query.py --repo flashinfer --tag fp8 --limit 30
-python3 scripts/grep_wiki.py "fp8" "moe" --only sources --files-only
 ```
 
----
+## SM100 PTX
 
-## Example 10: "What PTX instructions are unique to SM100?"
-
-**Navigation path**:
-1. `wiki/languages/ptx-sm100.md` — direct reference
-2. Cross-reference: tcgen05.alloc/mma/ld/st/dealloc/fence, clusterlaunchcontrol.try_cancel, cp.async.bulk.tensor multicast
-
-**Command**:
 ```bash
 python3 scripts/get_page.py lang-ptx --body-only
 python3 scripts/grep_wiki.py "tcgen05" --only wiki --context 0
 ```
 
----
+The PTX page separates SM100-specific tcgen05/TMEM/CLC behavior from older instructions that remain usable on SM100.
 
-## Synthesis Pattern
+## Synthesis rules
 
-For most questions, a high-quality answer follows this shape:
-
-```
-1. Topic framing (1-2 sentences, cite wiki page)
-   → Pull from wiki/<section>/<topic>.md ## Overview
-
-2. Technical mechanism (cite hardware + technique pages)
-   → wiki/hardware/*.md for hw details
-   → wiki/techniques/*.md for optimization patterns
-
-3. Concrete code snippet (copy from wiki page, already validated)
-   → Every technique/kernel/language page has a compilable snippet
-
-4. Performance evidence (cite performance_claims)
-   → Always report gpu, dtype, shape, metric, value, source_id
-
-5. References (cite source IDs)
-   → PR: pr-cutlass-2139 → sources/prs/cutlass/PR-2139.md
-   → Blog/doc: blog-* / doc-*
-```
-
-## Anti-Patterns (Don't Do These)
-
-- Don't recommend techniques without citing `sources:` — the wiki exists precisely for this.
-- Don't quote performance without the full 6-field `performance_claims` record.
-- Don't conflate `sm90` and `sm100` patterns — always check the `architectures:` field.
-- Don't cite `verified` claims without checking the page actually has `evidence_basis` entries that name both an official doc and an upstream code source.
-- Don't recommend DeepEP/DualPipe/EPLB — they're explicitly out of scope (kernel-only KB).
+- Cite the source ID and its pinned version or retrieval date.
+- Report every benchmark with GPU, dtype, shape, metric, baseline, and software context available in the source.
+- Treat illustrative snippets as pseudocode unless their artifact provenance and build instructions say otherwise.
+- Do not transfer SM90 results to SM100 or vice versa without new evidence.
+- For a `verified` page, check that `evidence_basis` actually contains the required independent source categories.

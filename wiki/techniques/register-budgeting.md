@@ -9,53 +9,29 @@ reproducibility: snippet
 prerequisites: []
 related: [pattern-memory-bound, pattern-register-pressure, kernel-nvfp4-gemv]
 sources: [blog-yue-nvfp4, blog-amandeep-nvfp4, blog-simon-nvfp4-gemv]
-blackwell_relevance: "TMEM eliminates accumulator register pressure on Blackwell, freeing ~100 registers/thread for other uses; technique still critical for memory-bound kernels."
+blackwell_relevance: "TMEM removes some accumulator register pressure, but epilogues, softmax, address state, and unrolling still consume registers."
 ---
 
 # Register Budgeting
 
-## Overview
-
-SM occupancy is inversely proportional to registers-per-thread. For memory-bound kernels, higher occupancy = more warps to hide memory latency. `-maxrregcount` and `__launch_bounds__` force the compiler to stay within a budget.
-
-## Pattern
+Registers can limit resident blocks/warps, but lowering a register budget can
+also introduce spills, recomputation, or less unrolling. Occupancy is stepwise,
+not simply inverse to registers per thread.
 
 ```cuda
-// Aggressive: 32 registers/thread → ~4 blocks per SM at 256 threads/block
-__launch_bounds__(256, 4)
-__global__ void gemv_memory_bound(...) {
-    // Compiler will spill to local memory if needed
+__global__ __launch_bounds__(256, 2)
+void memory_kernel(const float* input, float* output, int count) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < count) output[i] = input[i] * 2.0f;
 }
-
-// Or via nvcc flag:
-// nvcc -maxrregcount=32 -arch=sm_100a ...
 ```
 
-## Compiler Tradeoffs
+`__launch_bounds__` supplies compiler launch assumptions; `-maxrregcount` sets
+a compilation constraint. Neither guarantees a particular occupancy because
+shared memory, barrier slots, thread count, cluster shape, and device limits
+also apply.
 
-Lower register count → compiler may:
-- Spill frequently-used values to local memory (bad)
-- Recompute values instead of storing them (neutral)
-- Use fewer unrolled iterations (bad for compute-bound)
-
-For memory-bound kernels, spills can be hidden by memory latency anyway, so aggressive budgeting often wins.
-
-## GPU Mode NVFP4 GEMV Results
-
-| Rank | Register count | Latency |
-|------|---------------|---------|
-| 1 | 32 | 18.5μs |
-| 3 | 45 | ~20μs |
-
-The measurable difference between 32 and 45 registers shows occupancy dominates for memory-bound NVFP4 GEMV.
-
-## When To Use
-
-- Memory-bound kernels (first priority: occupancy)
-- Kernels where register pressure comes from inner loop, not accumulators (TMEM handles accumulators)
-- Sub-byte types with heavy decode/scale computation
-
-## When NOT To Use
-
-- Compute-bound GEMM (let compiler use what it needs)
-- Kernels where spills to local memory would serialize
+Measure spills, achieved occupancy, eligible warps, memory stalls, and runtime
+together. Spills use the memory hierarchy and are not “free” just because the
+kernel was already memory-bound. Approximate contest rank/latency comparisons
+do not isolate register count, so they are not retained as causal evidence.

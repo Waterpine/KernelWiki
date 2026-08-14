@@ -3,3 +3,8 @@
 .claude/
 __pycache__/
 *.pyc
+
+plan.md
+audit
+scripts/build_audit_coverage.py
+scripts/run_claude_audit.py

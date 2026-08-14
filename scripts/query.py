@@ -297,7 +297,7 @@ def main():
     parser.add_argument("--tag", help="Filter by tag (must appear in tags/techniques/hardware_features/kernel_types/languages)")
     parser.add_argument("--repo", help="Filter by source repo (partial match, e.g. 'cutlass')")
     parser.add_argument("--language", help="Filter by language/DSL (cute-dsl, cuda-cpp, ptx, triton, etc.)")
-    parser.add_argument("--architecture", help="Filter by architecture (sm100, sm100a, sm90, sm90a)")
+    parser.add_argument("--architecture", help="Filter by architecture (for example sm100, sm103, sm120, or sm90)")
     parser.add_argument("--symptom", help="Filter by pattern symptom (memory-bound, register-pressure, etc.)")
     parser.add_argument("--confidence", help="Filter by confidence (verified, source-reported, inferred, experimental)")
     parser.add_argument("--has-code", action="store_true", help="Only return pages whose artifact_dir contains at least one source file")

@@ -337,7 +337,7 @@ def validate_file(filepath, schemas, valid_tags, all_source_ids, code_langs):
     if page_type.startswith("wiki-"):
         archs = set(fm.get("architectures", []) if isinstance(fm.get("architectures"), list) else [])
         hopper_archs = archs & {"sm90", "sm90a"}
-        blackwell_archs = archs & {"sm100", "sm100a", "sm120"}
+        blackwell_archs = archs & {"sm100", "sm100a", "sm103", "sm103a", "sm120"}
         if hopper_archs and not blackwell_archs and "blackwell_relevance" not in fm:
             errors.append(
                 f"{rel}: page targets only Hopper {hopper_archs} without Blackwell arch; "
@@ -783,11 +783,12 @@ def validate_skip_audit_coverage():
             continue
         repo_slug = repo_full.split("/")[1] if "/" in repo_full else ledger_file.stem
         outdir = REPO_ROOT / "sources" / "prs" / repo_slug
-        existing_pages = set()
+        existing_pages = {}
         if outdir.is_dir():
             for p in outdir.glob("PR-*.md"):
                 try:
-                    existing_pages.add(int(p.stem.split("-")[1]))
+                    number = int(p.stem.split("-")[1])
+                    existing_pages[number] = (p, extract_frontmatter(p) or {})
                 except (ValueError, IndexError):
                     pass
         for row in ledger.get("prs", []) or []:
@@ -797,6 +798,21 @@ def validate_skip_audit_coverage():
                 continue
             num = row.get("number")
             if num in existing_pages:
+                page_path, page_fm = existing_pages[num]
+                ledger_title = row.get("title")
+                page_title = page_fm.get("title") if isinstance(page_fm, dict) else None
+                normalized_ledger_title = (
+                    ledger_title.strip() if isinstance(ledger_title, str) else ledger_title
+                )
+                normalized_page_title = (
+                    page_title.strip() if isinstance(page_title, str) else page_title
+                )
+                if ledger_title and normalized_page_title != normalized_ledger_title:
+                    errors.append(
+                        f"AC-4 metadata: {page_path.relative_to(REPO_ROOT)}::title "
+                        f"({page_title!r}) != candidates/{ledger_file.name} title "
+                        f"({ledger_title!r})"
+                    )
                 continue
             if (repo_full, num) in audit_keys:
                 continue
@@ -853,12 +869,76 @@ def validate_refresh_subset():
         results = yaml.safe_load(results_path.read_text(encoding="utf-8")) or {}
     except yaml.YAMLError as e:
         return [f"data/refresh-search-results.yaml: invalid YAML ({e})"]
-    for repo_block in results.get("repos", []) or []:
+
+    record_status = results.get("record_status")
+    allowed_statuses = {"current", "historical_partial"}
+    if record_status not in allowed_statuses:
+        errors.append(
+            "data/refresh-search-results.yaml::record_status must be one of "
+            f"{sorted(allowed_statuses)}, got {record_status!r}"
+        )
+
+    result_cutoff = results.get("cutoff_date")
+    result_cutoff_str = (
+        result_cutoff.isoformat()
+        if hasattr(result_cutoff, "isoformat")
+        else str(result_cutoff)
+    )
+    repo_blocks = results.get("repos", []) or []
+    result_slugs = [row.get("repo_slug") for row in repo_blocks if isinstance(row, dict)]
+    if len(result_slugs) != len(set(result_slugs)):
+        errors.append("data/refresh-search-results.yaml: duplicate repo_slug entries")
+
+    # A record labelled current is evidence for the complete ledger snapshot,
+    # so require the same cutoff and exactly the same repository universe.
+    # Historical partial checkpoints remain useful provenance, but must never
+    # silently satisfy current-round coverage.
+    if record_status == "current":
+        cutoff_path = DATA_DIR / "refresh-cutoff.yaml"
+        cutoff = None
+        if cutoff_path.is_file():
+            try:
+                cutoff_data = yaml.safe_load(cutoff_path.read_text(encoding="utf-8")) or {}
+                cutoff = cutoff_data.get("cutoff_date")
+            except yaml.YAMLError as e:
+                errors.append(f"data/refresh-cutoff.yaml: invalid YAML ({e})")
+        cutoff_str = cutoff.isoformat() if hasattr(cutoff, "isoformat") else str(cutoff)
+        if result_cutoff_str != cutoff_str:
+            errors.append(
+                "AC-5 current search results cutoff "
+                f"({result_cutoff_str!r}) != refresh cutoff ({cutoff_str!r})"
+            )
+
+        ledger_slugs = {path.stem for path in CANDIDATES_DIR.glob("*.yaml")}
+        result_slug_set = set(result_slugs)
+        if result_slug_set != ledger_slugs:
+            errors.append(
+                "AC-5 current search results repo set does not match candidate ledgers "
+                f"(missing={sorted(ledger_slugs - result_slug_set)}, "
+                f"extra={sorted(result_slug_set - ledger_slugs)})"
+            )
+
+    for repo_block in repo_blocks:
+        if not isinstance(repo_block, dict):
+            errors.append("data/refresh-search-results.yaml::repos entries must be mappings")
+            continue
         slug = repo_block.get("repo_slug")
         if not slug:
             continue
+        if record_status == "current":
+            for field in ("searched_at", "cutoff_date_used"):
+                value = repo_block.get(field)
+                value_str = value.isoformat() if hasattr(value, "isoformat") else str(value)
+                if value_str != result_cutoff_str:
+                    errors.append(
+                        f"AC-5 current search results {slug}::{field} "
+                        f"({value_str!r}) != results cutoff ({result_cutoff_str!r})"
+                    )
         ledger_path = CANDIDATES_DIR / f"{slug}.yaml"
         if not ledger_path.is_file():
+            errors.append(
+                f"data/refresh-search-results.yaml: no candidate ledger for repo_slug {slug!r}"
+            )
             continue
         ledger = yaml.safe_load(ledger_path.read_text(encoding="utf-8")) or {}
         ledger_nums = {row.get("number") for row in (ledger.get("prs") or [])
@@ -1388,6 +1468,43 @@ def validate_bundle(bundle_root, known_source_ids):
     return errors
 
 
+def validate_index_link_ids(all_known_ids):
+    """Ensure ID-shaped labels in index.md match their target page IDs."""
+    index_path = REPO_ROOT / "index.md"
+    if not index_path.is_file():
+        return []
+
+    errors = []
+    id_pattern = re.compile(
+        r"^(?:hw|technique|pattern|kernel|lang|migration|doc|blog|contest|pr)-[a-z0-9][a-z0-9.-]*$"
+    )
+    link_pattern = re.compile(r"\[([^\]]+)\]\(([^)]+\.md(?:#[^)]+)?)\)")
+    for label, raw_target in link_pattern.findall(index_path.read_text(encoding="utf-8")):
+        if not id_pattern.fullmatch(label):
+            continue
+        if label not in all_known_ids:
+            errors.append(f"index.md: ID-shaped link label '{label}' does not resolve")
+            continue
+        target = raw_target.split("#", 1)[0]
+        target_path = (index_path.parent / target).resolve()
+        try:
+            target_path.relative_to(REPO_ROOT.resolve())
+        except ValueError:
+            errors.append(f"index.md: ID-shaped link '{label}' targets a path outside the repository")
+            continue
+        if not target_path.is_file():
+            errors.append(f"index.md: ID-shaped link '{label}' target '{target}' does not exist")
+            continue
+        fm = extract_frontmatter(target_path)
+        target_id = fm.get("id") if isinstance(fm, dict) else None
+        if target_id != label:
+            errors.append(
+                f"index.md: link label '{label}' disagrees with "
+                f"{target_path.relative_to(REPO_ROOT)} id={target_id!r}"
+            )
+    return errors
+
+
 def main():
     tags = load_yaml_file(DATA_DIR / "tags.yaml")
     schemas = load_yaml_file(DATA_DIR / "schemas.yaml")
@@ -1476,6 +1593,9 @@ def main():
 
     # AC-2 hybrid version-claim registry consistency.
     all_errors.extend(validate_version_claims_registry(all_source_ids))
+
+    # ID-shaped labels in the hand-authored root index must name their target.
+    all_errors.extend(validate_index_link_ids(all_known_ids))
 
     # AC-11 inclusion-policy YAML scalar guard.
     all_errors.extend(validate_inclusion_policy_scalars())

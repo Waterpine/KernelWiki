@@ -72,6 +72,26 @@ EXCLUDE_TITLE_PATTERNS = [
     r'ruff', r'deprecat', r'release\s+note', r'committers\.md',
 ]
 
+ARCHITECTURE_PATTERNS = {
+    "sm100": re.compile(
+        r"\b(?:sm[_ -]?100|compute[_ -]?100|b100|b200|gb200)(?![a-z0-9])",
+        re.IGNORECASE,
+    ),
+    "sm100a": re.compile(r"\b(?:sm[_ -]?100a|compute[_ -]?100a)(?![a-z0-9])", re.IGNORECASE),
+    "sm103": re.compile(
+        r"\b(?:sm[_ -]?103|compute[_ -]?103|b300|gb300)(?![a-z0-9])",
+        re.IGNORECASE,
+    ),
+    "sm103a": re.compile(r"\b(?:sm[_ -]?103a|compute[_ -]?103a)(?![a-z0-9])", re.IGNORECASE),
+    "sm90": re.compile(
+        r"\b(?:sm[_ -]?90|compute[_ -]?90|hopper|h100|h200|h800|gh200)(?![a-z0-9])",
+        re.IGNORECASE,
+    ),
+    "sm90a": re.compile(r"\b(?:sm[_ -]?90a|compute[_ -]?90a)(?![a-z0-9])", re.IGNORECASE),
+    "sm120": re.compile(r"\b(?:sm[_ -]?120|compute[_ -]?120)(?![a-z0-9])", re.IGNORECASE),
+}
+ARCHITECTURE_ORDER = tuple(TAGS_DATA.get("architectures", []))
+
 
 import subprocess
 
@@ -195,6 +215,23 @@ def auto_tag(title, files):
     return sorted(tags), sorted(hw_features), sorted(kernel_types), sorted(techniques), sorted(languages)
 
 
+def infer_architectures(title, body, files):
+    """Return only architecture targets explicitly evidenced by PR text/paths.
+
+    Candidate selection establishes topical relevance, not a target architecture.
+    Generic "Blackwell" and NVFP4 mentions do not distinguish datacenter
+    SM100/SM103 from client SM120. An empty list means the captured material does not
+    establish the exact target.
+    """
+    text = " ".join([title or "", body or "", *(files or [])])
+    detected = {
+        architecture
+        for architecture, pattern in ARCHITECTURE_PATTERNS.items()
+        if pattern.search(text)
+    }
+    return [architecture for architecture in ARCHITECTURE_ORDER if architecture in detected]
+
+
 def generate_page(repo, pr_data, files, inclusion_reason, captured_at):
     """Generate markdown page content for a PR."""
     repo_slug = repo.split("/")[1]
@@ -206,11 +243,9 @@ def generate_page(repo, pr_data, files, inclusion_reason, captured_at):
     merge_sha = (pr_data.get("merge_commit_sha") or "unknown")[:8]
     body = pr_data.get("body") or ""
 
-    # Determine architectures
-    archs = ["sm100"]
-    text = (title + " " + body).lower()
-    if "sm90" in text or "hopper" in text:
-        archs.append("sm90")
+    # Candidate inclusion means relevant to this corpus; it does not prove a
+    # target. Architecture labels are derived only from explicit evidence.
+    archs = infer_architectures(title, body, files)
 
     tags, hw_features, kernel_types, techniques, languages = auto_tag(title, files)
 
@@ -268,6 +303,52 @@ def generate_page(repo, pr_data, files, inclusion_reason, captured_at):
     content += "\n"
 
     return content
+
+
+def reinfer_existing_architectures():
+    """Mechanically refresh architecture fields on existing generated pages."""
+    changed = 0
+    counts = {architecture: 0 for architecture in ARCHITECTURE_ORDER}
+    counts["unknown"] = 0
+    for page in sorted((REPO_ROOT / "sources" / "prs").rglob("PR-*.md")):
+        text = page.read_text(encoding="utf-8")
+        if not text.startswith("---\n"):
+            continue
+        end = text.find("\n---\n", 4)
+        if end < 0:
+            continue
+        fm = yaml.safe_load(text[4:end]) or {}
+        body = text[end + 5:]
+        architectures = infer_architectures(
+            str(fm.get("title") or ""), body, fm.get("changed_paths") or []
+        )
+        if architectures:
+            for architecture in architectures:
+                counts[architecture] += 1
+        else:
+            counts["unknown"] += 1
+
+        lines = text.splitlines(keepends=True)
+        start = next(
+            (index for index, line in enumerate(lines) if line.startswith("architectures:")),
+            None,
+        )
+        if start is None:
+            continue
+        stop = start + 1
+        if lines[start].strip() == "architectures:":
+            while stop < len(lines) and lines[stop].startswith("- "):
+                stop += 1
+        replacement = (
+            ["architectures:\n", *[f"- {architecture}\n" for architecture in architectures]]
+            if architectures
+            else ["architectures: []\n"]
+        )
+        updated = "".join([*lines[:start], *replacement, *lines[stop:]])
+        if updated != text:
+            page.write_text(updated, encoding="utf-8")
+            changed += 1
+    print(f"Re-inferred architectures in {changed} PR page(s): {counts}")
 
 
 def load_skip_audit():
@@ -414,6 +495,10 @@ def process_ledger(ledger_path, max_pages=None, captured_at=None, audit_map=None
 
 
 def main():
+    if "--reinfer-architectures" in sys.argv:
+        reinfer_existing_architectures()
+        return
+
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     max_pages = None
     captured_at = None
@@ -435,6 +520,7 @@ def main():
     else:
         print("Usage: python3 scripts/generate-pr-pages.py candidates/cutlass.yaml [--max=N] [--captured-at=YYYY-MM-DD]")
         print("       python3 scripts/generate-pr-pages.py --all [--max=N] [--captured-at=YYYY-MM-DD]")
+        print("       python3 scripts/generate-pr-pages.py --reinfer-architectures")
         print("       (default captured_at = today's date)")
         return
 

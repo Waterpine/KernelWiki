@@ -2,83 +2,43 @@
 id: technique-ping-pong-scheduling
 title: Ping-Pong Scheduling
 type: technique
-architectures:
-- sm100
-tags:
-- ping-pong-scheduling
-- warp-specialization
-- tmem
-- pipeline-stages
-confidence: source-reported
+architectures: [sm100]
+tags: [ping-pong-scheduling, warp-specialization, tmem, pipeline-stages]
+confidence: verified
 reproducibility: snippet
-prerequisites:
-- hw-tmem
-- technique-warp-specialization
-related:
-- kernel-flash-attention-4
-- technique-double-buffering
-sources:
-- blog-flash-attention-4
-- doc-flash-attention-4
-- blog-tcgen05-tutorial
+prerequisites: [hw-tmem, technique-warp-specialization]
+related: [kernel-flash-attention-4, technique-double-buffering]
+sources: [doc-flash-attention-4, blog-flash-attention-4, pr-flash-attention-2441, blog-tcgen05-tutorial]
+evidence_basis:
+  - source_id: doc-flash-attention-4
+    evidence_type: official-doc
+  - source_id: pr-flash-attention-2441
+    evidence_type: upstream-code
 artifact_dir: artifacts/kernels/ping-pong-scheduling
 ---
 
 # Ping-Pong Scheduling
 
-## Overview
+FlashAttention-4 computes two query tiles per CTA. While tensor-core operations
+run for one tile, a softmax warpgroup works on the other, then the roles
+alternate. The key is overlapping independent resource use, not merely toggling
+two integer buffer indices.
 
-Ping-pong scheduling alternates two query tiles within a single CTA so the softmax warpgroup never stalls waiting for MMA. Introduced in FlashAttention-4 to exploit Blackwell's asymmetric hardware (2× tensor cores, same SFU count as Hopper).
-
-## Pattern
-
-```cuda
-// Two 128-token query tiles per CTA, alternating through the mainloop
-// Warpgroup 0: softmax for tile A while MMA runs on tile B
-// Warpgroup 1: softmax for tile B while MMA runs on tile A
-
-__global__ void fa4_ping_pong_attn(...) {
-    int wg = warp_group_id();
-
-    // TMEM holds accumulators for BOTH tiles
-    uint32_t tmem_A = tmem_alloc(256);
-    uint32_t tmem_B = tmem_alloc(256);
-
-    for (int k = 0; k < num_kv_tiles; k++) {
-        if (wg == 0) {
-            // Compute softmax for tile A (previous MMA output)
-            softmax_normalize(tmem_A);
-            // Issue MMA for tile B next
-            tcgen05_mma(Q_B_smem, K_smem[k], tmem_B);
-        } else {
-            softmax_normalize(tmem_B);
-            tcgen05_mma(Q_A_smem, K_smem[k], tmem_A);
-        }
-        mbarrier_arrive(&ping_pong_sync);
-        mbarrier_wait(&ping_pong_sync);
-    }
-}
+```python
+def ping_pong_schedule(num_kv_tiles):
+    for kv_tile in range(num_kv_tiles):
+        current = kv_tile & 1
+        other = current ^ 1
+        launch_mma_for(current, kv_tile)
+        run_softmax_for(other, kv_tile - 1)
+        synchronize_handoff(current, other)
 ```
 
-## Why It Helps on Blackwell
+The real kernel stores multiple S/P/O intermediates in carefully partitioned
+TMEM and uses separate warpgroups, register budgets, and barriers. A correct
+implementation must also handle prologue and tail iterations and cannot have
+both branches issue conflicting TMEM operations as the old teaching kernel did.
 
-- Tensor core throughput doubled (B200 vs H100) but SFU count unchanged
-- Single-tile schedule would leave SFU idle while MMA runs, and vice versa
-- Ping-pong keeps both units 100% busy
-- FA4 achieves 1605 TFLOPS BF16 (71% utilization) with this pattern
-
-## When To Use
-
-- Compute-bound attention kernels on Blackwell
-- Kernels where softmax/epilogue is SFU-heavy
-- Not useful on Hopper (balance is different)
-
-## Full Reference Implementation
-
-Verbatim upstream code lives in [`artifacts/kernels/ping-pong-scheduling/full/`](../../artifacts/kernels/ping-pong-scheduling/full/); labeled derived variants (each with the required `// provenance: derived from ...; not upstream code` header) live in [`artifacts/kernels/ping-pong-scheduling/variants/`](../../artifacts/kernels/ping-pong-scheduling/variants/). Every file's SHA-256 and upstream-pinning metadata is in `PROVENANCE.yaml` inside each bundle.
-
-Query via:
-
-```bash
-python3 scripts/get_page.py technique-ping-pong-scheduling --include-code
-```
+Ping-pong is not automatically superior. It is useful when the two phases use
+different bottleneck resources and there is sufficient state for both tiles
+without damaging occupancy.

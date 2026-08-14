@@ -83,11 +83,13 @@ Alias mappings in `data/aliases.yaml` map canonical terms to known synonyms:
 
 - `concept`: text description only
 - `pseudocode`: language-agnostic algorithm
-- `snippet`: compilable code fragment
+- `snippet`: language-typed code fragment with real syntax; it may depend on surrounding declarations and is not self-contained
 - `runnable`: self-contained buildable example
 - `benchmarked`: runnable + perf numbers with env metadata
 
-**Minimum for technique/kernel/language pages**: `snippet`
+**Minimum for technique/kernel/language pages**: `snippet`. The validator checks
+fence language, code-like syntax, and substantive lines; it does not invoke a
+compiler. Only `runnable` claims a self-contained buildable example.
 
 ## Performance Claim Format
 
@@ -95,9 +97,9 @@ Alias mappings in `data/aliases.yaml` map canonical terms to known synonyms:
 performance_claims:
   - gpu: B200
     dtype: bf16
-    shape: "M=4096, N=4096, K=4096"
+    shape: "maximum over B200 BF16 sweep: seqlen=1K-32K, 32K total tokens"
     metric: TFLOPS
-    value: 1605
+    value: 1613
     utilization: "71%"
     source_id: doc-flash-attention-4
 ```
@@ -111,7 +113,7 @@ performance_claims:
 
 ## Scope Rules
 
-- **Blackwell-first**: SM100 content is primary. SM90 only with explicit `blackwell_relevance`.
+- **Blackwell-first**: SM100 content is primary. Hopper-only wiki pages require explicit `blackwell_relevance`; mixed SM90/SM100 pages are inherently in scope.
 - **Kernel-only**: No distributed system topics (DeepEP, DualPipe, EPLB excluded).
 - **English canonical**: All content in English.
 - **First-class DSLs**: CuTe DSL, CUDA C++, PTX, Triton. Others mentioned but no dedicated pages.

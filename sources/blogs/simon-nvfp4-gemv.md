@@ -15,8 +15,7 @@ tags:
 - vectorized-loads
 - register-reuse
 - batched-gemv
-retrieved_at: 2026-04-17
-artifact_dir: artifacts/blogs/simon-nvfp4-gemv/code
+retrieved_at: 2026-08-14
 ---
 
 # NVFP4 GEMV and Improved NVFP4 GEMV (Simon Veitner)
@@ -60,19 +59,19 @@ FP4 values are multiplied by their corresponding FP8 scale factors before accumu
 **Strategy 1: Extra Blocks (K-Parallel Grid)**
 - Launches grid blocks corresponding to K-tiles, eliminating the K-tile loop
 - Uses atomic operations on global memory (F32 accumulation buffer)
-- Performance: ~36,864 ops (benchmark 0), ~55,399 ops (benchmark 1)
+- Source benchmark means: ~36,864 (benchmark 0), ~55,399 (benchmark 1); the post's emitted output does not label the unit
 - Achieves 6.4x improvement on benchmark 0 versus reference
 
 **Strategy 2: Thread-Level with Atomic Add**
 - Distributes work across thread dimensions (threads_per_m=32, threads_per_k=32)
 - Uses shared memory atomics for collaborative result calculation
 - Avoids separate F32 tensor allocation overhead
-- Performance: ~38,911 ops (benchmark 0), ~67,258 ops (benchmark 1)
+- Source benchmark means: ~38,911 (benchmark 0), ~67,258 (benchmark 1); unit not stated
 
 **Strategy 3: Thread-Level with Reduction (No Atomics)**
 - Allocates 2D shared memory tensor (K-major stride)
 - Each thread pair stores intermediate results, then performs synchronous reduction
-- Performance: ~38,911 ops (benchmark 0), ~65,599 ops (benchmark 1)
+- Source benchmark means: ~38,911 (benchmark 0), ~65,599 (benchmark 1); unit not stated
 
 ### Key Technical Changes
 
@@ -84,7 +83,9 @@ FP4 values are multiplied by their corresponding FP8 scale factors before accumu
 
 ### Performance Summary
 
-Reference baseline: ~234,495 ops. Best improvement (extra blocks) delivers 6.4x speedup on larger K dimensions, though smaller K problems show more modest gains.
+Reference benchmark-0 mean: ~234,495 in the source's unlabeled output unit. The extra-block result of ~36,864 is about 6.4x lower for that case; other shapes show different gains.
+
+Primary posts: [NVFP4 GEMV](https://veitner.bearblog.dev/nvfp4-gemv/) and [NVFP4 GEMV improved](https://veitner.bearblog.dev/nvfp4-gemv-improved/).
 
 ## Key Insights
 
@@ -93,51 +94,11 @@ Reference baseline: ~234,495 ops. Best improvement (extra blocks) delivers 6.4x 
 - Atomic-free reductions in shared memory match or approach atomic-based approaches
 - The choice between strategies depends on K-dimension size and available SM resources
 
-## Key Code
+## Source-code boundary
 
-### Reference core computation (Part 1)
-
-```cpp
-// NVFP4 GEMV: FP4 values are decoded to FP32 via their per-block FP8 scale,
-// then multiplied against a decoded B element + its FP8 scale. Accumulation
-// stays in FP32. Simon's reference kernel does this in a CuTe register tile:
-for (int i = 0; i < TILES_K; i++) {
-    float a = decode_nvfp4(tArA[i]) * decode_fp8(tArSFA[i]);
-    float b = decode_nvfp4(tBrB[i]) * decode_fp8(tBrSFB[i]);
-    res += a * b;                // FP32 accumulation
-}
-```
-
-### Strategy 1 — K-parallel grid with atomic accumulation
-
-```cpp
-// Launch one CTA per (M-tile, K-tile); accumulate partial products into a
-// global FP32 buffer via atomicAdd, then cast to FP16 in a second pass.
-__global__ void nvfp4_gemv_k_parallel(
-    const __nv_fp4_e2m1* A, const __nv_fp8_e4m3* SFA,
-    const __nv_fp4_e2m1* B, const __nv_fp8_e4m3* SFB,
-    float* accum_f32, int K_TILES)
-{
-    int m_tile = blockIdx.x;
-    int k_tile = blockIdx.y;
-    float partial = nvfp4_dot_product(A, SFA, B, SFB, m_tile, k_tile);
-    atomicAdd(&accum_f32[m_tile], partial);
-}
-```
-
-### Strategy 3 — Atomic-free shared-memory reduction
-
-```cpp
-// Each thread pair stores an intermediate product; after __syncthreads()
-// the CTA reduces along K-major in shared memory without atomics.
-__shared__ float smem[THREADS_PER_M][THREADS_PER_K];
-smem[tid_m][tid_k] = thread_partial;
-__syncthreads();
-
-// Warp-wide parallel reduction along the K axis
-for (int s = THREADS_PER_K / 2; s > 0; s >>= 1) {
-    if (tid_k < s) smem[tid_m][tid_k] += smem[tid_m][tid_k + s];
-    __syncthreads();
-}
-if (tid_k == 0) C[m_base + tid_m] = __float2half(smem[tid_m][0]);
-```
+The original posts implement these kernels in CuTe DSL Python, including
+`@cute.kernel` entry points and CuTe tensor/layout operations. Earlier versions
+of this page included reconstructed CUDA C++ fragments that were not present in
+the cited posts. Those synthetic fragments have been removed; use the linked
+posts for the actual CuTe DSL source and treat the prose above as a structural
+summary only.
