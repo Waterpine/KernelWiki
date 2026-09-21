@@ -47,9 +47,10 @@ python3 scripts/query.py "how to fuse gate-up dual GEMM on Blackwell"
 python3 scripts/query.py --tag nvfp4 --type kernel
 python3 scripts/query.py --repo cutlass --limit 20
 python3 scripts/query.py --symptom tail-effect --compact
+python3 scripts/query.py --task-family "GDN prefill" --type kernel --has-code
 ```
 
-Filters: `--type`, `--tag`, `--repo`, `--language`, `--architecture`,
+Filters: `--type`, `--tag`, `--repo`, `--language`, `--architecture`, `--task-family`,
 `--symptom`, `--confidence`, `--limit`, `--compact`, `--paths-only`. `--tag`
 and `--architecture` accept aliases — `--tag UMMA` matches `tcgen05`,
 `--architecture B200` matches `sm100`, etc.
@@ -82,6 +83,7 @@ Auto-generated under `queries/`:
 - `queries/by-kernel-type.md` — gemm/attention/moe/mla/gated-delta-net → pages
 - `queries/by-language.md` — cute-dsl/cuda-cpp/ptx/triton → guide page + related kernels/sources
 - `queries/by-repo.md` — PR pages grouped by source repository
+- `queries/by-task-family.md` — one imported source summary and one kernel summary per exact task family
 
 ### Path 5: Primer, schema, examples
 
@@ -89,7 +91,7 @@ Companion docs under `references/`:
 
 - `references/primer.md` — topic map: hardware features, techniques, symptoms, canonical page IDs. Read this first when the question is broad.
 - `references/schema.md` — condensed frontmatter schema, confidence rules, reproducibility ladder, controlled vocabulary, canonical aliases.
-- `references/examples.md` — 10 worked query patterns mapping user questions → command sequences → synthesis.
+- `references/examples.md` — worked query patterns mapping user questions → command sequences → synthesis.
 
 ## Output Pattern
 
@@ -105,6 +107,8 @@ When answering from this KB:
 
 - Source PR pages, synthesized wiki pages, blog/doc/contest summaries, candidate ledgers, query indices, and artifact bundles.
 - **Verbatim upstream asset bundles** in `artifacts/` (PR patches and complete kernel files or excerpts) — pinned to upstream SHAs via `PROVENANCE.yaml`
+- **Local optimization-trace bundles** in `artifacts/experiments/` — complete source pairs, diffs, measurements, and local hash receipts
+- Human-facing trace pages are consolidated by task family; follow their variant links to independently receipted artifact bundles.
 - **Auto-generated query indices** in `queries/`
 - **Controlled vocabulary** (80+ tags) in `data/tags.yaml`, alias map in `data/aliases.yaml`
 - **Hybrid version-claim registry** — per-page `version_sensitive: <id>` pointers + `data/version-claims.yaml` central registry, validated for bidirectional consistency
@@ -120,3 +124,4 @@ To refresh the corpus: run `scripts/refresh_candidate_ledger.py`, regenerate PR 
 - Every technique/kernel/language page has a compilable snippet
 - Every PR page has `inclusion_reason` and an evidence-backed status; current distribution: 942 merged, 2 closed without merge
 - All Hopper-only wiki pages have explicit `blackwell_relevance`; source pages are exempt
+- Every accepted optimization trace has a direct positive old/new comparison and a deterministic local ledger row

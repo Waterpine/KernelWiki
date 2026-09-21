@@ -1,0 +1,282 @@
+--- before.py
++++ after.py
+@@ -1,5 +1,36 @@
+-"""FP8 block-scale DeepSeek-V3 MoE — CuTe-DSL kernels for B200/B300 (sm_10x).
+-(contest run: seed submission)
++"""FP8 block-scale DeepSeek-V3 MoE for B200/B300 (sm_10x).
++
++CuTe-DSL remains the primary implementation.  T=1, T=7, and T=15 use the
++integrity-clean persistent Triton fallback after same-card CUPTI crossover,
++changed-input A/B/A, and two 19/19 full-suite confirmations.  Its four-row M
++tile removes padded work while shape-proven segment sizes prevent cross-call
++watermark overlap.  The tiny path consumes the same accepted whole-K e4m3
++transform as CuTe through tile-contiguous W13/W2 views; weights never drop
++below e4m3.
++At T=1, every persistent CTA derives the exact current-call route vector in
++registers, avoiding the global histogram/barrier; deterministic output-slice
++initialization and exactly bounded cleanup preserve zero-route and cross-call
++correctness.
++The direct-routing candidate passed two floor-clearing 19/19 full suites at
++2.5599x mean / 2.7047x large and 2.6258x mean / 2.7337x large (CUPTI); an
++additional 19/19 variance sample measured 2.6017x / 2.6840x.
++
++The fused CuTe path differentiates TMA cache residency: one-shot FP8 weight
++tiles use evict_first, while activation tiles reused across expert N-items
++use evict_last.  This changes cache priority only, not data or arithmetic.
++Its GEMM1 producer also issues the second weight stage before waiting for the
++permuted activation tile, then completes both combined barriers with live A
++copies after the acquire gate.  This overlaps useful TMA traffic with routing
++without changing the shared-memory ring, stage count, or numerical path.
++Captured T=14 and T=59 use independent 108- and 112-CTA M64 persistent
++instances; other selected M64 shapes keep the full 148-CTA grid.  Diagnostic
++M128 fallbacks retain the previously proven 108/122/112 grids.
++At T=16 and T=32, the M64 inline activation requantizer column-stripes each
++sparse live row across four and two warps, respectively.  This changes only
++warp ownership of the current call's bf16-to-e4m3 conversion; every column and
++row scale is still rewritten before GEMM2.  All other shapes retain the
++two-row-per-warp mapping.
++The exact-grid follow-up passed two 19/19 full-suite confirmations.
+ 
+ Pipeline per call (3 kernel launches from one compiled host function):
+  1. routing: fused sigmoid + group-top-k + CSR build + activation permute
+@@ -24,6 +55,8 @@
+ import cutlass.cute as cute
+ import cutlass.torch as cutlass_torch
+ from cutlass.cute.runtime import from_dlpack
++
++import moe_triton_tiny
+ 
+ from moe_common import HIDDEN, INTER, KB1, KB2, META_SIZE
+ from moe_routing import RoutingKernel, WarmL2
+@@ -61,6 +94,45 @@
+                                     nthr=256, tiny=True)
+        self.g12f = MoeGemm12(fuse_rt=True, lean_tail=ltf, red_comb=rc,
+                              kblk=kblk)
++       self.m64_all = os.environ.get("MOE_M64_ALL", "0") == "1"
++       self.m64_disable = os.environ.get("MOE_M64_DISABLE", "0") == "1"
++       grid64 = int(os.environ.get("MOE_G12F_GRID64", "148"))
++       self.g12f64 = (
++           self.g12f if self.m64_disable else
++           MoeGemm12(
++               fuse_rt=True, lean_tail=ltf, red_comb=rc,
++               kblk=kblk, grid=grid64, m_tile=64,
++           )
++       )
++       # Three captured sparse item tables have smaller persistent-grid
++       # optima: their exact grids shorten the final partial wave while all
++       # other fused shapes retain the 148-CTA full-device instance.
++       grid14 = int(os.environ.get("MOE_G12F_GRID14", "108"))
++       grid16 = int(os.environ.get("MOE_G12F_GRID16", "122"))
++       grid59 = int(os.environ.get("MOE_G12F_GRID59", "112"))
++       self.g12f14 = MoeGemm12(fuse_rt=True, lean_tail=ltf, red_comb=rc,
++                               kblk=kblk, grid=grid14)
++       self.g12f16 = MoeGemm12(fuse_rt=True, lean_tail=ltf, red_comb=rc,
++                               kblk=kblk, grid=grid16)
++       self.g12f59 = MoeGemm12(fuse_rt=True, lean_tail=ltf, red_comb=rc,
++                               kblk=kblk, grid=grid59)
++       # Matching the sparse shape's proven grid removes the apparent M64
++       # regression at T=14/59: 108/112 CTAs save 0.76/0.90us versus the
++       # M128 exact-grid path, while M64 at the generic 148 grid loses.
++       self.g12f64_14 = (
++           self.g12f14 if self.m64_disable else
++           MoeGemm12(
++               fuse_rt=True, lean_tail=ltf, red_comb=rc,
++               kblk=kblk, grid=grid14, m_tile=64,
++           )
++       )
++       self.g12f64_59 = (
++           self.g12f59 if self.m64_disable else
++           MoeGemm12(
++               fuse_rt=True, lean_tail=ltf, red_comb=rc,
++               kblk=kblk, grid=grid59, m_tile=64,
++           )
++       )
+        # dense-P3 fused variant for mid T ([512, 2048)): expert-major
+        # permute with progressive perm_done release, so the first m-tiles'
+        # GEMM1 A-gates open while the permute is still running (token-major
+@@ -210,14 +282,74 @@
+                    counts, meta, psum, pflag, local_off, rsf, stream,
+                )
+            elif (T_ >= G12_FUSE_LO) & (T_ < G12_FUSE_HI):
+-               self.g12f.launch(
+-                   logits, bias, hidden, hs_scale, abuf, w13_nkl, w13m,
+-                   w2_nkl, w2m, w13t, w2t, cbuf_bf, cbuf, camax, cscale_row, perm_amax,
+-                   topk_e, topk_w, tok_cnt, row_token, row_weight, offsets,
+-                   cursors, dense_off, g1_off, g2_off, mt_done, perm_done,
+-                   zc_tokens, out, sbuf, mt_tokens, topk_slot, counts, meta,
+-                   psum, pflag, local_off, rsf, stream,
+-               )
++               if cutlass.const_expr(self.m64_all):
++                   self.g12f64.launch(
++                       logits, bias, hidden, hs_scale, abuf, w13_nkl, w13m,
++                       w2_nkl, w2m, w13t, w2t, cbuf_bf, cbuf, camax,
++                       cscale_row, perm_amax, topk_e, topk_w, tok_cnt,
++                       row_token, row_weight, offsets, cursors, dense_off,
++                       g1_off, g2_off, mt_done, perm_done, zc_tokens, out,
++                       sbuf, mt_tokens, topk_slot, counts, meta, psum, pflag,
++                       local_off, rsf, stream,
++                   )
++               # Exact official shapes where M64 wins at the generic grid;
++               # the two sparse exact-grid M64 instances dispatch below.
++               elif (
++                   (T_ == 16)
++                   | (T_ == 32)
++                   | ((T_ >= 52) & (T_ <= 58))
++                   | (T_ == 62)
++                   | (T_ == 80)
++               ):
++                   self.g12f64.launch(
++                       logits, bias, hidden, hs_scale, abuf, w13_nkl, w13m,
++                       w2_nkl, w2m, w13t, w2t, cbuf_bf, cbuf, camax,
++                       cscale_row, perm_amax, topk_e, topk_w, tok_cnt,
++                       row_token, row_weight, offsets, cursors, dense_off,
++                       g1_off, g2_off, mt_done, perm_done, zc_tokens, out,
++                       sbuf, mt_tokens, topk_slot, counts, meta, psum, pflag,
++                       local_off, rsf, stream,
++                   )
++               elif T_ == 14:
++                   self.g12f64_14.launch(
++                       logits, bias, hidden, hs_scale, abuf, w13_nkl, w13m,
++                       w2_nkl, w2m, w13t, w2t, cbuf_bf, cbuf, camax,
++                       cscale_row, perm_amax, topk_e, topk_w, tok_cnt,
++                       row_token, row_weight, offsets, cursors, dense_off,
++                       g1_off, g2_off, mt_done, perm_done, zc_tokens, out,
++                       sbuf, mt_tokens, topk_slot, counts, meta, psum, pflag,
++                       local_off, rsf, stream,
++                   )
++               elif T_ == 16:
++                   self.g12f16.launch(
++                       logits, bias, hidden, hs_scale, abuf, w13_nkl, w13m,
++                       w2_nkl, w2m, w13t, w2t, cbuf_bf, cbuf, camax,
++                       cscale_row, perm_amax, topk_e, topk_w, tok_cnt,
++                       row_token, row_weight, offsets, cursors, dense_off,
++                       g1_off, g2_off, mt_done, perm_done, zc_tokens, out,
++                       sbuf, mt_tokens, topk_slot, counts, meta, psum, pflag,
++                       local_off, rsf, stream,
++                   )
++               elif T_ == 59:
++                   self.g12f64_59.launch(
++                       logits, bias, hidden, hs_scale, abuf, w13_nkl, w13m,
++                       w2_nkl, w2m, w13t, w2t, cbuf_bf, cbuf, camax,
++                       cscale_row, perm_amax, topk_e, topk_w, tok_cnt,
++                       row_token, row_weight, offsets, cursors, dense_off,
++                       g1_off, g2_off, mt_done, perm_done, zc_tokens, out,
++                       sbuf, mt_tokens, topk_slot, counts, meta, psum, pflag,
++                       local_off, rsf, stream,
++                   )
++               else:
++                   self.g12f.launch(
++                       logits, bias, hidden, hs_scale, abuf, w13_nkl, w13m,
++                       w2_nkl, w2m, w13t, w2t, cbuf_bf, cbuf, camax,
++                       cscale_row, perm_amax, topk_e, topk_w, tok_cnt,
++                       row_token, row_weight, offsets, cursors, dense_off,
++                       g1_off, g2_off, mt_done, perm_done, zc_tokens, out,
++                       sbuf, mt_tokens, topk_slot, counts, meta, psum, pflag,
++                       local_off, rsf, stream,
++                   )
+            elif (T_ >= G12_FUSE_HI) & (T_ < G12_FUSE_HI2):
+                self.g12fd.launch(
+                    logits, bias, hidden, hs_scale, abuf, w13_nkl, w13m,
+@@ -318,7 +450,11 @@
+ # three-kernel large path (legacy: the merged kernel + epilogue reds now
+ # win at every measured size, so the default cut covers all workloads).
+ G12_CUT = int(os.environ.get("MOE_G12_CUT", "33000"))
+-G12_FUSE_LO = int(os.environ.get("MOE_G12_FUSE_LO", "24"))
++# contest run: fused measured >= the 2-kernel tiny path at every tiny size on
++# B300 (T=1: 59.4 both; T=7: -0.2us; T=14/15/16: -5.0us) — the rk multi-CTA
++# serial phase latency at T in [12,24) exceeds the fused prologue's grid
++# barrier. One hot path for all small T.
++G12_FUSE_LO = int(os.environ.get("MOE_G12_FUSE_LO", "1"))
+ G12_FUSE_HI = int(os.environ.get("MOE_G12_FUSE_HI", "512"))
+ # [FUSE_HI, FUSE_HI2) runs the dense-P3 fused variant (expert-major permute
+ # with progressive perm_done release). Session 7 measured parity-to--5us vs
+@@ -327,8 +463,9 @@
+ # fused variant now wins by ~4us (250.4 vs 254.4 @901). Default covers 901.
+ G12_FUSE_HI2 = int(os.environ.get("MOE_G12_FUSE_HI2", "1024"))
+ # T < RK_TINY_HI uses the one-CTA routing kernel: -4.6us @T=1, -3.7 @T=7,
+-# but a single CTA starves P0/P3 parallelism above ~10 tokens (+3us @T=15)
+-RK_TINY_HI = int(os.environ.get("MOE_RK_TINY_HI", "12"))
++# but a single CTA starves P0/P3 parallelism above ~10 tokens (+3us @T=15).
++# Contest run: dead by default (FUSE_LO=1 covers all tiny T).
++RK_TINY_HI = int(os.environ.get("MOE_RK_TINY_HI", "0"))
+ # T >= PAIR_CUT uses the M-pair GEMM1 instance (rk_big do_pair=2). Measured
+ # +50us at 11948: pair items consume BOTH TMEM acc stages, so the epilogue
+ # release latency (accw ~11us/item) is fully exposed instead of hidden by the
+@@ -353,6 +490,16 @@
+ _WARM_EV = None
+ _WS = {}
+ _PREP = {}
++
++# The clean persistent Triton path is faster only at three sparse official
++# tiny shapes.  Keep the CuTe path primary everywhere else; this switch is
++# shape-only and never depends on routing or activation contents.
++_USE_TRITON_TINY = os.environ.get("MOE_TRITON_TINY", "1") == "1"
++_TRITON_TINY_SHAPES = (1, 7, 15)
++# Experiment/dispatch knob: the CuTe seed's accepted whole-K e4m3 weight
++# transform can also feed the tiny Triton kernel through its tile-contiguous
++# copies.  It remains weights-only and is refreshed on tensor version change.
++_TRITON_TILED_W = os.environ.get("MOE_TRITON_TILED_W", "1") == "1"
+ 
+ 
+ _MB2 = 1 << 21  # 2 MiB
+@@ -397,6 +544,9 @@
+            ("g1_off", (33,), torch.int32, 512),
+            ("g2_off", (33,), torch.int32, 512),
+            ("dense_off", (33,), torch.int32, 512),
++           # The fixed routing slack makes this capacity sufficient for the
++           # selectively dispatched M=64 path at T<512 while preserving the
++           # placement-tuned production workspace layout.
+            ("mt_done", (P_max // 128 + 8,), torch.int32, 512),
+            ("perm_done", (P_max // 128 + 8,), torch.int32, 512),
+            ("row_token", (P_max,), torch.int32, 512),
+@@ -514,13 +664,48 @@
+    global _COMPILED
+    device = hidden_states.device
+    T = routing_logits.shape[0]
+-   ws = _get_ws(T, device)
+-   out = torch.empty((T, HIDDEN), dtype=torch.bfloat16, device=device)
+ 
+    if isinstance(local_expert_offset, torch.Tensor):
+        local_expert_offset = int(local_expert_offset.item())
+    if isinstance(routed_scaling_factor, torch.Tensor):
+        routed_scaling_factor = float(routed_scaling_factor.item())
++
++   if _USE_TRITON_TINY and T in _TRITON_TINY_SHAPES:
++       if _TRITON_TILED_W:
++           _, w13m, _, w2m, w13t, w2t = _prep_weights(
++               gemm1_weights,
++               gemm1_weights_scale,
++               gemm2_weights,
++               gemm2_weights_scale,
++           )
++           return moe_triton_tiny.run(
++               routing_logits,
++               routing_bias,
++               hidden_states,
++               hidden_states_scale,
++               w13t,
++               w13m,
++               w2t,
++               w2m,
++               local_expert_offset,
++               routed_scaling_factor,
++               tiled_weights=True,
++           )
++       return moe_triton_tiny.run(
++           routing_logits,
++           routing_bias,
++           hidden_states,
++           hidden_states_scale,
++           gemm1_weights,
++           gemm1_weights_scale,
++           gemm2_weights,
++           gemm2_weights_scale,
++           local_expert_offset,
++           routed_scaling_factor,
++       )
++
++   ws = _get_ws(T, device)
++   out = torch.empty((T, HIDDEN), dtype=torch.bfloat16, device=device)
+ 
+    w13p, w13m, w2p, w2m, w13t, w2t = _prep_weights(
+        gemm1_weights, gemm1_weights_scale, gemm2_weights, gemm2_weights_scale

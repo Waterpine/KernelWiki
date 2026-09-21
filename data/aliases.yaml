@@ -123,3 +123,54 @@ cuda-core-promotion:
   - "Nc=128 promotion"
   - "FP22 accumulator fix"
   - "accumulation promotion"
+
+# Imported optimization task families
+comba_forward:
+  - "Comba forward"
+  - "Comba prefill"
+
+cuda_cpp:
+  - "CUDA C++ experiment"
+
+cute:
+  - "CuTe experiment"
+
+dense_kernel_01_sm100:
+  - "SM100 dense GEMM"
+
+dense_kernel_11_flashattention_3:
+  - "FlashAttention 3 forward"
+
+dense_kernel_12_flashattention_3:
+  - "FlashAttention 3 backward"
+
+dsa_attention:
+  - "DSA attention"
+  - "DeepSeek sparse attention"
+
+gated_delta_product_forward:
+  - "gated delta product forward"
+
+gated_oja_forward:
+  - "gated Oja forward"
+
+gdn2_forward:
+  - "GDN2 forward"
+
+gdn_prefill:
+  - "GDN prefill"
+
+gsa_forward:
+  - "GSA forward"
+
+iplr_forward:
+  - "IPLR forward"
+
+kda_backward:
+  - "KDA backward"
+
+kda_forward:
+  - "KDA forward"
+
+mesa_net_forward:
+  - "MesaNet forward"

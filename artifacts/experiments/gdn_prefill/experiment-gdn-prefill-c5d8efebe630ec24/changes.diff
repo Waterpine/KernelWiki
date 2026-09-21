@@ -1,0 +1,10 @@
+--- before.py
++++ after.py
+@@ -43,6 +43,7 @@
+             gate = -cute.math.exp(a_log[head]) * softplus
+ 
+             b_val = cutlass.Float32(b[idx])
++            beta = cutlass.Float32(0.0)
+             if b_val >= cutlass.Float32(0.0):
+                 z = cute.math.exp(-b_val)
+                 beta = cutlass.Float32(1.0) / (cutlass.Float32(1.0) + z)

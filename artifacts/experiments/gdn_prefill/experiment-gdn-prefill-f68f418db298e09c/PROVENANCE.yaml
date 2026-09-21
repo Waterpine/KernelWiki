@@ -1,0 +1,39 @@
+source_kind: optimization-trace
+logical_run_id: run-29c12181a623012f
+imported_evidence_sha256: 3f9a74a11b7998dac6438d3e6bb77bc547adf069d086d46a32a3c14c8a5cfbc7
+imported_manifest_row_sha256: b931fdbab3fd27e47ee7a0fd3bdae4cbe036fde5280c93a5ecb8360bf98e3e46
+receipt_date: unknown
+receipt_date_policy: evidence-preserved-unknown
+evidence_limitations:
+- The local corpus preserves the selected comparison, not the complete session trace.
+- Causal mechanisms are hypotheses unless explicitly attributed by the retained evidence.
+- The retained comparison has no separate correctness result; the applicable task gate is documented.
+- The manifest reports 82 unreplayed mutation(s) outside the selected complete source pair.
+files:
+- local_path: TASK.md
+  role: task
+  mode: generated
+  size: 6161
+  sha256: f9ed900c8a7c5d443c30d36eed42ee43ea0d6fa9fcb1c1b217d7f7337df7cfcb
+- local_path: after.py
+  role: after-code
+  mode: copied-verbatim
+  size: 77574
+  sha256: 4a73c335305008345935e79806b75eeada556d620533896f7f45be59ef345607
+  normalization: copied-verbatim
+- local_path: before.py
+  role: before-code
+  mode: copied-verbatim
+  size: 8272
+  sha256: 791219bd947157c6b792ec223c5596ef458176b9ddf097f67a238fc81bff0c2c
+  normalization: copied-verbatim
+- local_path: changes.diff
+  role: unified-diff
+  mode: generated
+  size: 79964
+  sha256: e318ee9515e500d84d08bdb0713f5bfad0364685efdd46b5a80b8a859add521a
+- local_path: performance.md
+  role: performance
+  mode: generated
+  size: 5592
+  sha256: ec32ffb237e202c4557cb475ac67c70f67156da0c3b8bb421dca97312247d616

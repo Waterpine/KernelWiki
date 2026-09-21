@@ -121,6 +121,44 @@ source-contest:
   constraints:
     source_category: contest-report
 
+source-experiment:
+  required:
+    - id
+    - title
+    - source_category
+    - task_family
+    - architectures
+    - tags
+    - techniques
+    - kernel_types
+    - languages
+    - captured_at
+    - artifact_dir
+    - experiment_count
+    - experiments
+    - performance_claims
+    - correctness_status
+  optional:
+    - hardware_features
+    - evidence_limitations
+  constraints:
+    source_category: optimization-trace
+    id_prefix: experiment-family-
+    correctness_status:
+      - explicit-pass
+      - gate-described-no-explicit-result
+      - mixed
+  experiments_schema:
+    required:
+      - experiment_id
+      - logical_run_id
+      - selected_code_path
+      - evidence_sha256
+      - manifest_row_sha256
+      - artifact_dir
+      - correctness_status
+      - evidence_limitations
+
 wiki-hardware:
   required:
     - id
@@ -211,6 +249,10 @@ wiki-kernel:
     - evidence_basis
     - version_sensitive
     - artifact_dir
+    - task_family
+    - correctness_status
+    - evidence_limitations
+    - experiment_count
   disallow_peer_of_artifact_dir:
     - full_code_dir
     - variants_dir
@@ -298,6 +340,35 @@ artifact-bundle-provenance:
       mode: [verbatim, extracted, derived, upstream-patch]
       upstream_path_required_when: "mode in [verbatim, extracted] and upstream_sha present"
       heading_path_required_when: "mode == extracted"
+
+## Optimization-trace bundles are local evidence receipts. Unlike upstream
+## asset bundles, they must not invent an origin URL, repository, commit,
+## author, or license.
+experiment-bundle-provenance:
+  required:
+    - source_kind
+    - logical_run_id
+    - imported_evidence_sha256
+    - imported_manifest_row_sha256
+    - receipt_date
+    - receipt_date_policy
+    - evidence_limitations
+    - files
+  constraints:
+    source_kind: optimization-trace
+    receipt_date_policy: evidence-preserved-unknown
+  files_schema:
+    required:
+      - local_path
+      - role
+      - mode
+      - size
+      - sha256
+    optional:
+      - normalization
+    constraints:
+      role: [task, before-code, after-code, unified-diff, performance]
+      mode: [copied-verbatim, newline-normalized, generated]
 
 ## Phase 3: inclusion-policy.yaml schema
 ## Defines how PRs from data/cute-dsl-universe.yaml and data/triton-universe.yaml

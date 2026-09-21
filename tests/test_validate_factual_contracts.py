@@ -514,7 +514,7 @@ class ShippedDocumentationContractTests(unittest.TestCase):
         )
         bundles = len(list((ROOT / "artifacts").rglob("PROVENANCE.yaml")))
 
-        self.assertEqual(158, discovered_tests)
+        self.assertEqual(168, discovered_tests)
         for path in (ROOT / "audit/regression-tests.md", ROOT / "audit/validation-results.md"):
             self.assertIn(f"{discovered_tests} tests", path.read_text(encoding="utf-8"))
         for path in (
@@ -629,16 +629,20 @@ class ShippedDocumentationContractTests(unittest.TestCase):
         )
 
     def test_shipped_artifact_mode_description_matches_provenance(self):
-        modes = {
-            self.frontmatter(path)["asset_mode"]
+        receipts = [
+            self.frontmatter(path)
             for path in (ROOT / "artifacts").rglob("PROVENANCE.yaml")
-        }
+        ]
+        modes = {receipt["asset_mode"] for receipt in receipts if "asset_mode" in receipt}
+        trace_receipts = [receipt for receipt in receipts if receipt.get("source_kind") == "optimization-trace"]
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
 
         self.assertEqual({"verbatim"}, modes)
+        self.assertEqual(18, len(trace_receipts))
         for text in (readme, skill):
             self.assertIn("Verbatim upstream asset bundles", text)
+            self.assertIn("Local optimization-trace bundles", text)
             self.assertNotIn("Verbatim/extracted/derived asset bundles", text)
 
     def test_gemv_progression_points_to_technique_page(self):

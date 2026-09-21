@@ -80,6 +80,10 @@ techniques:
   - top-k-selection
   - parallel-scan
   - stream-k
+  - precision-specialization
+  - tensor-core-optimization
+  - tma-transfers
+  - parallel-reduction
 
 kernel_types:
   - gemm
@@ -133,6 +137,26 @@ source_categories:
   - benchmark-blog
   - contest-report
   - community-note
+  - optimization-trace
+
+task_families:
+  - comba_forward
+  - cuda_cpp
+  - cute
+  - dense_kernel_01_sm100
+  - dense_kernel_11_flashattention_3
+  - dense_kernel_12_flashattention_3
+  - dsa_attention
+  - gated_delta_product_forward
+  - gated_oja_forward
+  - gdn2_forward
+  - gdn_prefill
+  - gsa_forward
+  - iplr_forward
+  - kda_backward
+  - kda_forward
+  - mesa_net_forward
+  - moe
 
 evidence_types:
   - official-doc

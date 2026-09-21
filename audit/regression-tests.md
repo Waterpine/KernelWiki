@@ -10,7 +10,7 @@ body, scope, metadata, query, and provenance guards were absent.
 
 Command: `python3 -m unittest discover -s tests -p 'test_*.py'`
 
-Result: **pass — 158 tests**.
+Result: **pass — 168 tests**.
 
 Coverage includes:
 
@@ -50,6 +50,9 @@ Coverage includes:
   width while preserving hunk and mode discrimination;
 - schema snippet requirements and positive/negative substantive-code checks;
 - version-cutoff handling for old and newly obtained evidence.
+- deterministic optimization-trace import, exact duplicate handling, direct
+  before/after comparison rejection, local provenance, self-containment, and
+  exact/alias-aware task-family query integration.
 - Definition-of-Done contract-v3 identity reconciliation, including failure
   when an active fixture and its colocated roster row are deleted together
   without a roster-preserving retirement tombstone.

@@ -158,6 +158,22 @@ python3 scripts/grep_wiki.py "tcgen05" --only wiki --context 0
 
 ---
 
+## Example 11: "Show measured GDN prefill optimization traces"
+
+Use the task-family filter to retrieve the consolidated source summary and
+kernel summary. Add `--type kernel --has-code` for the family overview, then
+follow a variant's local artifact links for complete before/after code.
+
+```bash
+python3 scripts/query.py --task-family "GDN prefill" --type kernel --has-code --compact
+python3 scripts/query.py "GDN prefill latency" --compact
+```
+
+The filter is exact after alias normalization: `GDN prefill` resolves to
+`gdn_prefill` and does not merge other Gated Delta Net families.
+
+---
+
 ## Synthesis Pattern
 
 For most questions, a high-quality answer follows this shape:

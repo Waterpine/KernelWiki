@@ -1,0 +1,103 @@
+--- before.py
++++ after.py
+@@ -13,6 +13,7 @@
+ import cutlass.cute as cute
+ import torch
+ from cutlass import BFloat16, Float32, Int32
++from cutlass.cute.experimental import iket
+ from cutlass.cute.runtime import make_ptr
+ 
+ 
+@@ -64,6 +65,8 @@
+             q_pe[token, head, lane + i * 32]
+         )
+ 
++    score_range = iket.range_start("score_gather_dot")
++
+     # Eight warps independently compute one score at a time.  The index load
+     # is warp-uniform, then retained in shared memory for the value pass.
+     for it in range(_TOPK // _WARPS):
+@@ -92,12 +95,18 @@
+                 score, offset=offset, mask=-1, mask_and_clamp=31
+             )
+         if lane == 0:
+-            scores[pos] = score * sm_scale if index >= 0 else Float32.neg_inf
+-
+-    cute.arch.barrier()
++            scores[pos] = score * sm_scale if index >= 0 else -Float32.inf
++
++    cute.arch.barrier()
++    iket.range_end(softmax_range)
++
++    value_range = iket.range_start("value_gather_accumulate")
++    iket.range_end(score_range)
++
++    softmax_range = iket.range_start("softmax")
+ 
+     # Block-wide maximum over the 2048 score slots.
+-    local_max = Float32.neg_inf
++    local_max = -Float32.inf
+     for i in range(_TOPK // _THREADS):
+         local_max = cute.arch.fmax(local_max, scores[tidx + i * _THREADS])
+     for offset in [16, 8, 4, 2, 1]:
+@@ -112,7 +121,7 @@
+     cute.arch.barrier()
+ 
+     if warp == 0:
+-        block_max = Float32.neg_inf
++        block_max = -Float32.inf
+         if lane < _WARPS:
+             block_max = reduction[lane]
+         for offset in [16, 8, 4, 2, 1]:
+@@ -123,16 +132,16 @@
+                 ),
+             )
+         if lane == 0:
+-            reduction[0] = block_max
+-    cute.arch.barrier()
+-    block_max = reduction[0]
++            reduction[_WARPS] = block_max
++    cute.arch.barrier()
++    block_max = reduction[_WARPS]
+ 
+     # Exponentiate in FP32 and compute the block-wide denominator.
+     local_sum = Float32(0.0)
+     for i in range(_TOPK // _THREADS):
+         pos = tidx + i * _THREADS
+         weight = Float32(0.0)
+-        if scores[pos] != Float32.neg_inf:
++        if scores[pos] != -Float32.inf:
+             weight = cute.exp(scores[pos] - block_max)
+         scores[pos] = weight
+         local_sum += weight
+@@ -182,6 +191,7 @@
+ 
+     output[token, head, tidx] = BFloat16(acc0)
+     output[token, head, tidx + _THREADS] = BFloat16(acc1)
++    iket.range_end(value_range)
+ 
+ 
+ @cute.jit
+@@ -222,7 +232,21 @@
+         cute.make_layout((num_tokens, _NUM_HEADS, _LATENT_DIM), stride=(8192, 512, 1)),
+     )
+ 
+-    _dsa_simt_kernel(
++    _dsa_dense_kernel(
++        q_nope,
++        q_pe,
++        ckv_cache,
++        kpe_cache,
++        sparse_indices,
++        output,
++        sm_scale,
++    ).launch(
++        grid=(num_tokens * _NUM_HEADS, 1, 1),
++        block=(_THREADS, 1, 1),
++        smem=_SMEM_BYTES,
++        stream=stream,
++    )
++    _dsa_ragged_kernel(
+         q_nope,
+         q_pe,
+         ckv_cache,

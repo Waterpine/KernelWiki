@@ -90,6 +90,8 @@ Pages with explicit generic Blackwell evidence but no supported exact SM in that
 | Page | Path |
 |------|------|
 | [NVIDIA CUDA Toolkit 13.3 overview](../sources/docs/nvidia-cuda-13.md) | `sources/docs/nvidia-cuda-13.md` |
+| [Optimization trace family: KDA backward](../sources/experiments/kda_backward.md) | `sources/experiments/kda_backward.md` |
+| [Optimization trace family: KDA forward](../sources/experiments/kda_forward.md) | `sources/experiments/kda_forward.md` |
 | [[None][perf] Add more optimization options for MOE CuteDSL finalized kernel](../sources/prs/TensorRT-LLM/PR-10042.md) | `sources/prs/TensorRT-LLM/PR-10042.md` |
 | [[TRTLLM-9992][perf] Enable PDL for CuteDSL kernels and overlap MoeOutputMemset](../sources/prs/TensorRT-LLM/PR-10043.md) | `sources/prs/TensorRT-LLM/PR-10043.md` |
 | [[None][feat] CuteDSL MOE FC1 Enhancement](../sources/prs/TensorRT-LLM/PR-10088.md) | `sources/prs/TensorRT-LLM/PR-10088.md` |
@@ -134,6 +136,8 @@ Pages with explicit generic Blackwell evidence but no supported exact SM in that
 | [Use CU_MEMCPY_SRC_ACCESS_ORDER_ANY for batch KV cache swaps](../sources/prs/vllm/PR-39306.md) | `sources/prs/vllm/PR-39306.md` |
 | [Faster per-token fp8 group quant packed kernel for blackwell](../sources/prs/vllm/PR-41326.md) | `sources/prs/vllm/PR-41326.md` |
 | [[Kernel] (1/N) Machete - Hopper Optimized Mixed Precision Linear Kernel ](../sources/prs/vllm/PR-7174.md) | `sources/prs/vllm/PR-7174.md` |
+| [Optimization case studies: KDA backward](../wiki/kernels/kernel-trace-kda-backward.md) | `wiki/kernels/kernel-trace-kda-backward.md` |
+| [Optimization case studies: KDA forward](../wiki/kernels/kernel-trace-kda-forward.md) | `wiki/kernels/kernel-trace-kda-forward.md` |
 
 ## Architecture unknown
 
@@ -516,6 +520,9 @@ Source-PR pages whose validated evidence review found no family-level or exact a
 | [NVIDIA CUTLASS Blackwell support map](../sources/docs/nvidia-cutlass-blackwell.md) | `sources/docs/nvidia-cutlass-blackwell.md` |
 | [PTX ISA Fifth-Generation Tensor Core and CLC Reference](../sources/docs/nvidia-ptx-isa-sm100.md) | `sources/docs/nvidia-ptx-isa-sm100.md` |
 | [Triton 3.6 Release Notes — Blackwell Backend Work](../sources/docs/triton-3.6-blackwell.md) | `sources/docs/triton-3.6-blackwell.md` |
+| [Optimization trace family: CuTe MoE](../sources/experiments/cute.md) | `sources/experiments/cute.md` |
+| [Optimization trace family: Gated Delta Net prefill](../sources/experiments/gdn_prefill.md) | `sources/experiments/gdn_prefill.md` |
+| [Optimization trace family: Mixture-of-Experts](../sources/experiments/moe.md) | `sources/experiments/moe.md` |
 | [Fix multicast bug and optimize masked GEMM](../sources/prs/DeepGEMM/PR-193.md) | `sources/prs/DeepGEMM/PR-193.md` |
 | [[Public release 26/04] Introducing Mega MoE, FP4 Indexer and other features/fixes](../sources/prs/DeepGEMM/PR-304.md) | `sources/prs/DeepGEMM/PR-304.md` |
 | [Sync nv_dev with upstream #316 (Mega MoE optimizations & benchmarks)](../sources/prs/DeepGEMM/PR-328.md) | `sources/prs/DeepGEMM/PR-328.md` |
@@ -831,6 +838,9 @@ Source-PR pages whose validated evidence review found no family-level or exact a
 | [Gated Delta Network kernels](../wiki/kernels/gated-delta-net.md) | `wiki/kernels/gated-delta-net.md` |
 | [Gated Dual GEMM (Gate-Up + Activation)](../wiki/kernels/gated-dual-gemm.md) | `wiki/kernels/gated-dual-gemm.md` |
 | [Grouped GEMM for MoE](../wiki/kernels/grouped-gemm.md) | `wiki/kernels/grouped-gemm.md` |
+| [Optimization case studies: CuTe MoE](../wiki/kernels/kernel-trace-cute.md) | `wiki/kernels/kernel-trace-cute.md` |
+| [Optimization case studies: Gated Delta Net prefill](../wiki/kernels/kernel-trace-gdn-prefill.md) | `wiki/kernels/kernel-trace-gdn-prefill.md` |
+| [Optimization case studies: Mixture-of-Experts](../wiki/kernels/kernel-trace-moe.md) | `wiki/kernels/kernel-trace-moe.md` |
 | [NVFP4 GEMM](../wiki/kernels/nvfp4-gemm.md) | `wiki/kernels/nvfp4-gemm.md` |
 | [NVFP4 batched GEMV](../wiki/kernels/nvfp4-gemv.md) | `wiki/kernels/nvfp4-gemv.md` |
 | [Sparse MLA](../wiki/kernels/sparse-mla.md) | `wiki/kernels/sparse-mla.md` |
@@ -950,6 +960,10 @@ Source-PR pages whose validated evidence review found no family-level or exact a
 | Page | Path |
 |------|------|
 | [PTX ISA Fifth-Generation Tensor Core and CLC Reference](../sources/docs/nvidia-ptx-isa-sm100.md) | `sources/docs/nvidia-ptx-isa-sm100.md` |
+| [Optimization trace family: DeepSeek sparse attention](../sources/experiments/dsa_attention.md) | `sources/experiments/dsa_attention.md` |
+| [Optimization trace family: Gated Delta Net prefill](../sources/experiments/gdn_prefill.md) | `sources/experiments/gdn_prefill.md` |
+| [Optimization trace family: KDA forward](../sources/experiments/kda_forward.md) | `sources/experiments/kda_forward.md` |
+| [Optimization trace family: Mixture-of-Experts](../sources/experiments/moe.md) | `sources/experiments/moe.md` |
 | [Sync nv_dev with upstream #316 (Mega MoE optimizations & benchmarks)](../sources/prs/DeepGEMM/PR-328.md) | `sources/prs/DeepGEMM/PR-328.md` |
 | [[TRTLLM-9831][perf] Enable 2CTA with autotune for CuteDSL MoE and Grouped GEMM optimizations](../sources/prs/TensorRT-LLM/PR-10201.md) | `sources/prs/TensorRT-LLM/PR-10201.md` |
 | [[None] [feat] Add densegemm backend for MoE](../sources/prs/TensorRT-LLM/PR-10479.md) | `sources/prs/TensorRT-LLM/PR-10479.md` |
@@ -989,6 +1003,10 @@ Source-PR pages whose validated evidence review found no family-level or exact a
 | [[MLA] Optimize mla indexer prepare uniform decode for MTP > 1](../sources/prs/vllm/PR-39458.md) | `sources/prs/vllm/PR-39458.md` |
 | [[DSV4]   Fuse norm and router for low latency scenario](../sources/prs/vllm/PR-41263.md) | `sources/prs/vllm/PR-41263.md` |
 | [Cluster Launch Control (CLC)](../wiki/hardware/clc.md) | `wiki/hardware/clc.md` |
+| [Optimization case studies: DeepSeek sparse attention](../wiki/kernels/kernel-trace-dsa-attention.md) | `wiki/kernels/kernel-trace-dsa-attention.md` |
+| [Optimization case studies: Gated Delta Net prefill](../wiki/kernels/kernel-trace-gdn-prefill.md) | `wiki/kernels/kernel-trace-gdn-prefill.md` |
+| [Optimization case studies: KDA forward](../wiki/kernels/kernel-trace-kda-forward.md) | `wiki/kernels/kernel-trace-kda-forward.md` |
+| [Optimization case studies: Mixture-of-Experts](../wiki/kernels/kernel-trace-moe.md) | `wiki/kernels/kernel-trace-moe.md` |
 
 ### `sm103a`
 

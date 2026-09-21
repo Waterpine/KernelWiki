@@ -55,7 +55,10 @@ path Codex's review environment takes.
 2. From the repo root: `python3 scripts/verify_verbatim.py --strict`.
 3. In a network-capable environment, require exit 0 and the final stdout line
    `All verbatim/upstream-patch assets match upstream.` The preceding
-   `Verified N bundle(s).` count follows the current corpus; at the
-   post-Round-24 state it is `Verified 37 bundle(s).`
+   `Verified N bundle(s).` count follows the current corpus eligible for this
+   verifier. The
+   post-import repository has 55 bundle manifests: 37 upstream-verbatim
+   bundles covered by this verifier and 18 local optimization-trace bundles
+   covered by `validate.py` and `check_self_contained.py`.
 4. In an offline environment the verifier correctly exits 2 (`ENV:` stream),
    NOT 1 — proving the contract separates env failure from content mismatch.

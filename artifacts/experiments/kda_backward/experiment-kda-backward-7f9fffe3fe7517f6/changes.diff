@@ -1,0 +1,169 @@
+--- before.py
++++ after.py
+@@ -1,4 +1,4 @@
+-"""KDA backward: CuTe-DSL Blackwell implementation (v6: occ-2 G1b, fused G2, tmem permit fix)."""
++"""KDA backward: warp-specialized TMA, sliced H96 epilogues, and G2 PDL."""
+ 
+ from __future__ import annotations
+ 
+@@ -22,11 +22,17 @@
+ import kda_g2_h96
+ 
+ 
++PRIORITIZE_H64_VARLEN = True
++COMPACT_FINAL_LOADS = True
++FINAL_LOAD_BATCH = 8
++G2_HOIST_BETA = True
++
++
+ class _C:
+    g1 = {}
+    g1a = {}
+    g2 = {}
+-   fin = None
++   fin = {}
+    kg1 = {}
+    kg2 = {}
+    s1 = None
+@@ -41,8 +47,12 @@
+    H = q.shape[2]
+    stream = cuda_drv.CUstream(torch.cuda.current_stream().cuda_stream)
+ 
+-   bufs = KC.prepare(q, k, g, beta, A_log, dt_bias, cu_seqlens)
+-   KC.run_intra(bufs, v.reshape(-1, KD), H, float(scale), dev)
++   # Prep+intra go out as one compiled launch packet so intra's host-side
++   # allocation and argument packing never surfaces as a device idle gap.
++   # Prep itself emits the chunk tables and cleared accumulators (each block
++   # walks cu_seqlens), so no metadata kernel opens the timed span.
++   bufs = KC.prepare_intra(q, k, g, beta, A_log, dt_bias, cu_seqlens,
++                           v.reshape(-1, KD), float(scale))
+    if _C.s1 is None:
+        _C.s1 = torch.cuda.Stream()
+        _C.s_hi = torch.cuda.Stream(priority=-1)
+@@ -50,7 +60,9 @@
+        _C.ev_b = torch.cuda.Event()
+    bufs["dh"] = torch.empty(bufs["nt_up"] * H * KD, KD, device=dev, dtype=torch.bfloat16)
+    bufs["dv2"] = torch.empty(bufs["nt_up"] * BT * H, KD, device=dev, dtype=torch.bfloat16)
+-   prioritize_fwd = H == 64 and bufs["n_seq"] == 1
++   prioritize_fwd = H == 64 and (
++       bufs["n_seq"] == 1 or
++       (PRIORITIZE_H64_VARLEN and bufs["n_seq"] == 6))
+    _C.ev_a.record()
+    if prioritize_fwd:
+        with torch.cuda.stream(_C.s_hi):
+@@ -66,31 +78,35 @@
+ 
+    nt_up = bufs["nt_up"]
+    rows = nt_up * BT * H
+-   dq_pre = torch.empty(rows, KD, device=dev, dtype=torch.float32)
++   dq_pre = torch.empty(rows, KD, device=dev, dtype=torch.bfloat16)
+    daqk = torch.empty(rows, BT, device=dev, dtype=torch.bfloat16)
+    stream_g1a = (
+        cuda_drv.CUstream(_C.s_hi.cuda_stream) if prioritize_fwd else stream
+    )
+    g1a_args = (
+        _ptr(grad_out, cutlass.BFloat16), _ptr(bufs["vnew"], cutlass.BFloat16),
+-       _ptr(bufs["h"], cutlass.BFloat16), _ptr(bufs["gc"], cutlass.Float32),
++       _ptr(bufs["h"], cutlass.BFloat16), _ptr(bufs["gc"], cutlass.Float16),
+        _ptr(bufs["tbl"], cutlass.Int32),
+-       _ptr(dq_pre, cutlass.Float32), _ptr(daqk, cutlass.BFloat16),
++       _ptr(dq_pre, cutlass.BFloat16), _ptr(daqk, cutlass.BFloat16),
+        Int32(nt_up), Float32(scale), Int32(T), stream_g1a)
+    if prioritize_fwd:
+        with torch.cuda.stream(_C.s_hi):
+            if H not in _C.g1a:
++               # G1A's warp-1 TMA producer overlaps warp-0 TMEM allocation.
+                _C.g1a[H] = cute.compile(kda_g1.KGrad1A(H).launch, *g1a_args)
+            _C.g1a[H](*g1a_args)
+            _C.ev_b.record(_C.s_hi)
+    else:
+        if H not in _C.g1a:
++           # G1A's warp-1 TMA producer overlaps warp-0 TMEM allocation.
+            _C.g1a[H] = cute.compile(kda_g1.KGrad1A(H).launch, *g1a_args)
+        _C.g1a[H](*g1a_args)
+    torch.cuda.current_stream().wait_event(_C.ev_b)
+ 
+-   dk_pre = torch.empty(rows, KD, device=dev, dtype=torch.float32)
+-   dg_pre = torch.empty(rows, KD, device=dev, dtype=torch.float32)
++   dk_pre = torch.empty(rows, KD, device=dev, dtype=torch.bfloat16)
++   # The public gate gradient is BF16; round the local per-token handoff once
++   # while retaining FP32 accumulation in the final reverse scan.
++   dg_pre = torch.empty(rows, KD, device=dev, dtype=torch.bfloat16)
+    db_pre = torch.empty(rows, device=dev, dtype=torch.float32)
+    dv_out = torch.empty_like(v)
+    dakk = torch.empty(rows, BT, device=dev, dtype=torch.bfloat16)
+@@ -100,10 +116,10 @@
+        _ptr(bufs["vnew"], cutlass.BFloat16), _ptr(bufs["dv2"], cutlass.BFloat16),
+        _ptr(bufs["h"], cutlass.BFloat16), _ptr(bufs["dh"], cutlass.BFloat16),
+        _ptr(bufs["qn"], cutlass.BFloat16), _ptr(bufs["kn"], cutlass.BFloat16),
+-       _ptr(bufs["gc"], cutlass.Float32), _ptr(bufs["bs"], cutlass.Float32),
++       _ptr(bufs["gc"], cutlass.Float16), _ptr(bufs["bs"], cutlass.Float16),
+        _ptr(bufs["nmat"], cutlass.BFloat16), _ptr(bufs["tbl"], cutlass.Int32),
+-       _ptr(dq_pre, cutlass.Float32), _ptr(dk_pre, cutlass.Float32),
+-       _ptr(dg_pre, cutlass.Float32), _ptr(db_pre, cutlass.Float32),
++       _ptr(dq_pre, cutlass.BFloat16), _ptr(dk_pre, cutlass.BFloat16),
++       _ptr(dg_pre, cutlass.BFloat16), _ptr(db_pre, cutlass.Float32),
+        _ptr(dv_out, cutlass.BFloat16), _ptr(daqk, cutlass.BFloat16),
+        _ptr(dakk, cutlass.BFloat16),
+        Int32(nt_up), Float32(scale), Int32(T), stream)
+@@ -120,38 +136,46 @@
+    g2_args = (
+        _ptr(daqk, cutlass.BFloat16), _ptr(dakk, cutlass.BFloat16),
+        _ptr(bufs["qn"], cutlass.BFloat16), _ptr(bufs["kn"], cutlass.BFloat16),
+-       _ptr(bufs["gc"], cutlass.Float32), _ptr(bufs["bs"], cutlass.Float32),
++       _ptr(bufs["gc"], cutlass.Float16), _ptr(bufs["bs"], cutlass.Float16),
+        _ptr(bufs["rq"], cutlass.Float32), _ptr(bufs["rk"], cutlass.Float32),
+        _ptr(bufs["tbl"], cutlass.Int32),
+-       _ptr(dq_pre, cutlass.Float32), _ptr(dk_pre, cutlass.Float32),
+-       _ptr(dg_pre, cutlass.Float32), _ptr(db_pre, cutlass.Float32),
++       _ptr(dq_pre, cutlass.BFloat16), _ptr(dk_pre, cutlass.BFloat16),
++       _ptr(dg_pre, cutlass.BFloat16), _ptr(db_pre, cutlass.Float32),
+        _ptr(dq, cutlass.BFloat16), _ptr(dk, cutlass.BFloat16),
+        _ptr(dbeta, cutlass.BFloat16),
+        Int32(H), Int32(nt_up), stream)
+-   if H not in _C.g2:
++   g2_key = (H, G2_HOIST_BETA)
++   if g2_key not in _C.g2:
+        # The 256-column staged G2 reaches two-CTA residency.  Its balanced
+        # warpgroup epilogue is now faster for both benchmark head counts.
+-       _C.kg2[H] = kda_g2_h96.KGrad2()
+-       _C.g2[H] = cute.compile(_C.kg2[H].launch, *g2_args)
+-   _C.g2[H](*g2_args)
++       _C.kg2[g2_key] = kda_g2_h96.KGrad2()
++       g2_compile_args = (
++           *g2_args[:-1], H == 96, G2_HOIST_BETA, g2_args[-1])
++       _C.g2[g2_key] = cute.compile(
++           _C.kg2[g2_key].launch, *g2_compile_args)
++   _C.g2[g2_key](*g2_args)
+ 
+    fin_args = (
+-       _ptr(dq_pre, cutlass.Float32), _ptr(dk_pre, cutlass.Float32),
+-       _ptr(dg_pre, cutlass.Float32), _ptr(db_pre, cutlass.Float32),
+-       _ptr(bufs["gc"], cutlass.Float32), _ptr(k, cutlass.BFloat16),
++       _ptr(dq_pre, cutlass.BFloat16), _ptr(dk_pre, cutlass.BFloat16),
++       _ptr(dg_pre, cutlass.BFloat16), _ptr(db_pre, cutlass.Float32),
++       _ptr(bufs["gc"], cutlass.Float16), _ptr(k, cutlass.BFloat16),
+        _ptr(g, cutlass.BFloat16), _ptr(beta, cutlass.BFloat16),
+        _ptr(bufs["qn"], cutlass.BFloat16), _ptr(bufs["kn"], cutlass.BFloat16),
+        _ptr(bufs["rq"], cutlass.Float32), _ptr(bufs["rk"], cutlass.Float32),
+-       _ptr(bufs["bs"], cutlass.Float32), _ptr(A_log, cutlass.Float32),
++       _ptr(bufs["bs"], cutlass.Float16), _ptr(A_log, cutlass.Float32),
+        _ptr(dt_bias, cutlass.Float32), _ptr(bufs["tbl"], cutlass.Int32),
+        _ptr(dq, cutlass.BFloat16), _ptr(dk, cutlass.BFloat16),
+        _ptr(dg, cutlass.BFloat16), _ptr(dbeta, cutlass.BFloat16),
+        _ptr(bufs["dA_log"], cutlass.Float32), _ptr(bufs["ddt"], cutlass.Float32),
+        Int32(H), Int32(bufs["nt_up"]), stream)
+-   if _C.fin is None:
+-       _C.fin = cute.compile(kda_g2.launch_final, *fin_args)
++   fin_key = (H, COMPACT_FINAL_LOADS, FINAL_LOAD_BATCH)
++   if fin_key not in _C.fin:
++       fin_compile_args = (
++           *fin_args[:-1], COMPACT_FINAL_LOADS, FINAL_LOAD_BATCH,
++           H == 96, fin_args[-1])
++       _C.fin[fin_key] = cute.compile(kda_g2.launch_final, *fin_compile_args)
+ 
+-   _C.fin(*fin_args)
++   _C.fin[fin_key](*fin_args)
+ 
+    return dq, dk, dv_out, dg, dbeta, bufs["dA_log"], bufs["ddt"]
+ 

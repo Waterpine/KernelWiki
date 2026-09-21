@@ -1,0 +1,211 @@
+--- before.py
++++ after.py
+@@ -54,10 +54,8 @@
+         group_end = expert + Int32(32)
+         row = token * Int32(NUM_GLOBAL_EXPERTS)
+         while expert < group_end:
+-            raw = self._sigmoid(
+-                routing_logits[row + expert].load().to(Float32)
+-            )
+-            score = raw + routing_bias[expert].load().to(Float32)
++            raw = self._sigmoid(routing_logits[row + expert].to(Float32))
++            score = raw + routing_bias[expert].to(Float32)
+             if score > best:
+                 second = best
+                 best = score
+@@ -146,7 +144,9 @@
+         if tid == Int32(0):
+             route_base = token * Int32(TOP_K)
+ 
+-            # Temporarily store the four selected group IDs in route_ids[0:4].
++            # Temporarily store the four selected group IDs in the weight
++            # scratch.  route_ids is overwritten one slot at a time below, so
++            # it cannot also hold the group mask during expert selection.
+             for rank in cutlass.range_constexpr(4):
+                 best_group = Int32(-1)
+                 best_group_score = Float32(-3.402823466e38)
+@@ -154,7 +154,12 @@
+                     group = Int32(group_py)
+                     already_selected = False
+                     for previous in cutlass.range_constexpr(rank):
+-                        if route_ids[route_base + Int32(previous)].load() == group:
++                        if (
++                            route_weights[
++                                route_base + Int32(previous)
++                            ].to(Int32)
++                            == group
++                        ):
+                             already_selected = True
+                     if not already_selected:
+                         group_score = self._group_score(
+@@ -163,7 +168,7 @@
+                         if group_score > best_group_score:
+                             best_group_score = group_score
+                             best_group = group
+-                route_ids[route_base + Int32(rank)] = best_group
++                route_weights[route_base + Int32(rank)] = Float32(best_group)
+ 
+             # Select the eight largest biased expert scores in those groups.
+             # Previously selected IDs are read back from global scratch; this
+@@ -171,41 +176,43 @@
+             for rank in cutlass.range_constexpr(TOP_K):
+                 best_expert = Int32(-1)
+                 best_score = Float32(-3.402823466e38)
+-                for expert_py in cutlass.range_constexpr(NUM_GLOBAL_EXPERTS):
+-                    expert = Int32(expert_py)
++                expert = Int32(0)
++                while expert < Int32(NUM_GLOBAL_EXPERTS):
+                     group = expert // Int32(32)
+                     kept_group = False
+                     for group_slot in cutlass.range_constexpr(4):
+-                        if route_ids[route_base + Int32(group_slot)].load() == group:
++                        if (
++                            route_weights[
++                                route_base + Int32(group_slot)
++                            ].to(Int32)
++                            == group
++                        ):
+                             kept_group = True
+                     already_selected = False
+                     for previous in cutlass.range_constexpr(rank):
+-                        if route_ids[route_base + Int32(previous)].load() == expert:
++                        if route_ids[route_base + Int32(previous)] == expert:
+                             already_selected = True
+                     if kept_group:
+                         if not already_selected:
+                             raw = self._sigmoid(
+                                 routing_logits[
+                                     token * Int32(NUM_GLOBAL_EXPERTS) + expert
+-                                ]
+-                                .load()
+-                                .to(Float32)
+-                            )
+-                            score = raw + routing_bias[expert].load().to(Float32)
++                                ].to(Float32)
++                            )
++                            score = raw + routing_bias[expert].to(Float32)
+                             if score > best_score:
+                                 best_score = score
+                                 best_expert = expert
++                    expert += Int32(1)
+                 route_ids[route_base + Int32(rank)] = best_expert
+ 
+             weight_sum = Float32(0.0)
+             for rank in cutlass.range_constexpr(TOP_K):
+-                expert = route_ids[route_base + Int32(rank)].load()
++                expert = route_ids[route_base + Int32(rank)]
+                 raw = self._sigmoid(
+                     routing_logits[
+                         token * Int32(NUM_GLOBAL_EXPERTS) + expert
+-                    ]
+-                    .load()
+-                    .to(Float32)
++                    ].to(Float32)
+                 )
+                 route_weights[route_base + Int32(rank)] = raw
+                 weight_sum += raw
+@@ -216,7 +223,7 @@
+             for rank in cutlass.range_constexpr(TOP_K):
+                 idx = route_base + Int32(rank)
+                 route_weights[idx] = (
+-                    route_weights[idx].load().to(Float32) * normalization
++                    route_weights[idx].to(Float32) * normalization
+                 )
+ 
+     @cute.kernel
+@@ -240,7 +247,7 @@
+         tile_idx = Int32(tile_idx_raw)
+         token = pair_idx // Int32(TOP_K)
+         slot = pair_idx - token * Int32(TOP_K)
+-        global_expert = route_ids[pair_idx].load()
++        global_expert = route_ids[pair_idx]
+         local_expert = global_expert - local_expert_offset
+ 
+         if local_expert >= Int32(0):
+@@ -262,7 +269,7 @@
+                             )
+                             a = hidden_states[
+                                 token * Int32(HIDDEN_SIZE) + k
+-                            ].load().to(Float32)
++                            ].to(Float32)
+                             first_w_idx = (
+                                 (local_expert * Int32(2 * INTERMEDIATE_SIZE) + n)
+                                 * Int32(HIDDEN_SIZE)
+@@ -278,10 +285,10 @@
+                                 + k
+                             )
+                             first_partial += (
+-                                a * gemm1_weights[first_w_idx].load().to(Float32)
++                                a * gemm1_weights[first_w_idx].to(Float32)
+                             )
+                             second_partial += (
+-                                a * gemm1_weights[second_w_idx].load().to(Float32)
++                                a * gemm1_weights[second_w_idx].to(Float32)
+                             )
+ 
+                         first_partial = cute.arch.warp_reduction(
+@@ -292,7 +299,7 @@
+                         )
+                         a_scale = hidden_states_scale[
+                             k_block * seq_len + token
+-                        ].load().to(Float32)
++                        ].to(Float32)
+                         first_scale_idx = (
+                             (
+                                 local_expert * Int32(2 * INTERMEDIATE_SIZE // BLOCK_SIZE)
+@@ -313,12 +320,12 @@
+                         first_acc += (
+                             first_partial
+                             * a_scale
+-                            * gemm1_weights_scale[first_scale_idx].load().to(Float32)
++                            * gemm1_weights_scale[first_scale_idx].to(Float32)
+                         )
+                         second_acc += (
+                             second_partial
+                             * a_scale
+-                            * gemm1_weights_scale[second_scale_idx].load().to(Float32)
++                            * gemm1_weights_scale[second_scale_idx].to(Float32)
+                         )
+                         k_block += Int32(1)
+ 
+@@ -358,7 +365,7 @@
+             route_base = token * Int32(TOP_K)
+             for slot in cutlass.range_constexpr(TOP_K):
+                 pair_idx = route_base + Int32(slot)
+-                global_expert = route_ids[pair_idx].load()
++                global_expert = route_ids[pair_idx]
+                 local_expert = global_expert - local_expert_offset
+                 if local_expert >= Int32(0):
+                     if local_expert < Int32(NUM_LOCAL_EXPERTS):
+@@ -374,14 +381,14 @@
+                                 )
+                                 a = intermediate[
+                                     pair_idx * Int32(INTERMEDIATE_SIZE) + k
+-                                ].load().to(Float32)
++                                ].to(Float32)
+                                 w_idx = (
+                                     (local_expert * Int32(HIDDEN_SIZE) + h)
+                                     * Int32(INTERMEDIATE_SIZE)
+                                     + k
+                                 )
+                                 partial += (
+-                                    a * gemm2_weights[w_idx].load().to(Float32)
++                                    a * gemm2_weights[w_idx].to(Float32)
+                                 )
+                             partial = cute.arch.warp_reduction(partial, operator.add)
+                             scale_idx = (
+@@ -394,12 +401,12 @@
+                             )
+                             route_acc += (
+                                 partial
+-                                * gemm2_weights_scale[scale_idx].load().to(Float32)
++                                * gemm2_weights_scale[scale_idx].to(Float32)
+                             )
+                             k_block += Int32(1)
+                         output_acc += (
+                             route_acc
+-                            * route_weights[pair_idx].load().to(Float32)
++                            * route_weights[pair_idx].to(Float32)
+                         )
+ 
+             if lane == Int32(0):

@@ -322,6 +322,29 @@ def generate_by_language(pages):
     return "\n".join(lines) + "\n"
 
 
+def generate_by_task_family(pages):
+    """Generate exact memberships for imported experiment and case-study pages."""
+    grouped = defaultdict(list)
+    for page in pages:
+        family = page.get("task_family")
+        if family:
+            grouped[family].append(page)
+    lines = [
+        "# Query: By Task Family",
+        "",
+        "> Auto-generated. Do not edit manually. Membership is exact; aliases are resolved by `scripts/query.py`.",
+        "",
+        "| Task Family | Pages |",
+        "|-------------|-------|",
+    ]
+    for family in sorted(grouped):
+        links = []
+        for page in sorted(grouped[family], key=lambda value: value["_path"]):
+            links.append(f"[{page.get('title', page.get('id', 'Untitled'))}]({qlink(page['_path'])})")
+        lines.append(f"| `{family}` | {', '.join(links)} |")
+    return "\n".join(lines) + "\n"
+
+
 def architecture_index_sets(pages):
     """Return the canonical exact, family-only, and unknown index memberships."""
     exact = defaultdict(list)
@@ -406,6 +429,7 @@ def main():
         "by-repo.md": generate_by_repo,
         "by-kernel-type.md": generate_by_kernel_type,
         "by-language.md": generate_by_language,
+        "by-task-family.md": generate_by_task_family,
     }
 
     for filename, gen_func in generators.items():

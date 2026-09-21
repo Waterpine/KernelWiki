@@ -480,6 +480,8 @@ def detect_page_type(filepath, fm):
             return "source-blog"
         elif parts[1] == "contests":
             return "source-contest"
+        elif parts[1] == "experiments":
+            return "source-experiment"
     elif parts[0] == "wiki":
         t = fm.get("type", "")
         if t:
@@ -738,6 +740,13 @@ def validate_file(filepath, schemas, valid_tags, all_source_ids, code_langs):
             if arch not in valid_archs:
                 errors.append(f"{rel}: unknown architecture '{arch}'")
 
+    # Optimization-trace task families are a separate controlled vocabulary.
+    if "task_family" in fm:
+        family = fm["task_family"]
+        valid_families = set(valid_tags.get("task_families", []))
+        if not isinstance(family, str) or family not in valid_families:
+            errors.append(f"{rel}: unknown task_family '{family}'")
+
     # Factual-audit architecture contract for generated PR sources.  Empty is
     # permitted only as an explicit, visible, evidence-noted unknown.
     if page_type == "source-pr":
@@ -911,6 +920,80 @@ def validate_file(filepath, schemas, valid_tags, all_source_ids, code_langs):
                 f"expected '{constraints['type']}' for {page_type}"
             )
 
+    correctness_constraint = constraints.get("correctness_status")
+    if correctness_constraint and "correctness_status" in fm:
+        if fm["correctness_status"] not in correctness_constraint:
+            errors.append(
+                f"{rel}: correctness_status '{fm['correctness_status']}' not in "
+                f"{correctness_constraint}"
+            )
+
+    if page_type == "source-experiment":
+        if fm.get("captured_at") != "unknown" and not re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}", str(fm.get("captured_at", ""))
+        ):
+            errors.append(f"{rel}: captured_at must be YYYY-MM-DD or 'unknown'")
+        if not str(fm.get("artifact_dir", "")).startswith("artifacts/experiments/"):
+            errors.append(f"{rel}: source-experiment artifact_dir must be under artifacts/experiments/")
+        experiments = fm.get("experiments")
+        if not isinstance(experiments, list) or not experiments:
+            errors.append(f"{rel}: source-experiment experiments must be a non-empty list")
+            experiments = []
+        if fm.get("experiment_count") != len(experiments):
+            errors.append(f"{rel}: experiment_count does not match experiments")
+        required_experiment_fields = {
+            "experiment_id", "logical_run_id", "selected_code_path",
+            "evidence_sha256", "manifest_row_sha256", "artifact_dir",
+            "correctness_status", "evidence_limitations",
+        }
+        experiment_ids = set()
+        artifact_dirs = set()
+        statuses = set()
+        family_slug = str(fm.get("task_family", "")).replace("_", "-")
+        for index, experiment in enumerate(experiments):
+            if not isinstance(experiment, dict):
+                errors.append(f"{rel}: experiments[{index}] must be a mapping")
+                continue
+            missing = required_experiment_fields - set(experiment)
+            if missing:
+                errors.append(f"{rel}: experiments[{index}] missing {sorted(missing)}")
+            experiment_id = str(experiment.get("experiment_id", ""))
+            if not re.fullmatch(rf"experiment-{re.escape(family_slug)}-[0-9a-f]{{16}}", experiment_id):
+                errors.append(f"{rel}: experiments[{index}] has invalid experiment_id")
+            if experiment_id in experiment_ids:
+                errors.append(f"{rel}: duplicate experiment_id '{experiment_id}'")
+            experiment_ids.add(experiment_id)
+            if not re.fullmatch(r"run-[0-9a-f]{16}", str(experiment.get("logical_run_id", ""))):
+                errors.append(f"{rel}: experiments[{index}] has invalid logical_run_id")
+            selected = str(experiment.get("selected_code_path", ""))
+            if not selected or Path(selected).name != selected:
+                errors.append(f"{rel}: experiments[{index}] selected_code_path must be a logical basename")
+            for digest_field in ("evidence_sha256", "manifest_row_sha256"):
+                if not re.fullmatch(r"[0-9a-f]{64}", str(experiment.get(digest_field, ""))):
+                    errors.append(f"{rel}: experiments[{index}].{digest_field} must be a lowercase SHA-256")
+            experiment_dir = str(experiment.get("artifact_dir", ""))
+            family_dir = str(fm.get("artifact_dir", "")).rstrip("/")
+            if not experiment_dir.startswith(family_dir + "/") or not (REPO_ROOT / experiment_dir).is_dir():
+                errors.append(f"{rel}: experiments[{index}] artifact_dir does not resolve under the family bundle")
+            if experiment_dir in artifact_dirs:
+                errors.append(f"{rel}: duplicate experiment artifact_dir '{experiment_dir}'")
+            artifact_dirs.add(experiment_dir)
+            statuses.add(experiment.get("correctness_status"))
+        expected_status = next(iter(statuses)) if len(statuses) == 1 else "mixed"
+        if statuses and fm.get("correctness_status") != expected_status:
+            errors.append(f"{rel}: family correctness_status does not summarize experiments")
+        for index, claim in enumerate(fm.get("performance_claims") or []):
+            if isinstance(claim, dict) and claim.get("experiment_id") not in experiment_ids:
+                errors.append(f"{rel}: performance_claims[{index}] has unknown experiment_id")
+
+    if page_type == "wiki-kernel" and "task_family" in fm:
+        if not str(fm.get("artifact_dir", "")).startswith("artifacts/experiments/"):
+            errors.append(f"{rel}: imported wiki-kernel artifact_dir must be under artifacts/experiments/")
+        if "correctness_status" not in fm:
+            errors.append(f"{rel}: imported wiki-kernel requires correctness_status")
+        if not isinstance(fm.get("experiment_count"), int) or fm.get("experiment_count", 0) < 1:
+            errors.append(f"{rel}: imported wiki-kernel requires a positive experiment_count")
+
     errors.extend(blackwell_relevance_errors(fm, page_type, rel))
 
     # Check performance_claims structure (including shape and numeric value)
@@ -945,6 +1028,27 @@ def validate_file(filepath, schemas, valid_tags, all_source_ids, code_langs):
                     errors.append(
                         f"{rel}: performance_claims[{i}].source_locator must be a non-empty exact locator"
                     )
+                if page_type == "source-experiment" or "task_family" in fm:
+                    if isinstance(locator, str) and not locator.startswith("artifacts/experiments/"):
+                        errors.append(
+                            f"{rel}: imported performance locator must be a local artifacts/experiments path"
+                        )
+                    elif isinstance(locator, str):
+                        path_text, _, anchor = locator.partition("#")
+                        local_target = REPO_ROOT / path_text
+                        if not local_target.is_file():
+                            errors.append(f"{rel}: performance locator target '{path_text}' does not exist")
+                        elif anchor:
+                            body = local_target.read_text(encoding="utf-8", errors="replace")
+                            expected_heading = anchor.replace("-", " ").lower()
+                            headings = {
+                                re.sub(r"[^a-z0-9 -]", "", heading.lower()).strip().replace(" ", "-")
+                                for heading in re.findall(r"^#{1,6}\s+(.+)$", body, re.MULTILINE)
+                            }
+                            if anchor.lower() not in headings:
+                                errors.append(
+                                    f"{rel}: performance locator anchor '#{anchor}' does not exist in '{path_text}'"
+                                )
 
     # Check wiki sources reference existing source ids
     if page_type.startswith("wiki-") and "sources" in fm and isinstance(fm["sources"], list):
@@ -991,7 +1095,14 @@ def validate_file(filepath, schemas, valid_tags, all_source_ids, code_langs):
     ):
         body = read_body(filepath)
         if not has_compilable_code(body, code_langs):
-            errors.append(f"{rel}: {page_type} page must contain fenced code block (reproducibility >= snippet)")
+            trace_family = page_type == "wiki-kernel" and "task_family" in fm
+            artifact_dir = REPO_ROOT / str(fm.get("artifact_dir", ""))
+            artifact_code = trace_family and artifact_dir.is_dir() and any(
+                path.is_file() and path.suffix.lower() in ASSET_SOURCE_EXTS
+                for path in artifact_dir.rglob("*")
+            )
+            if not artifact_code:
+                errors.append(f"{rel}: {page_type} page must contain fenced code block (reproducibility >= snippet)")
 
     # Phase 3 AC-11: enforce disallow_peer_of_artifact_dir at page top level
     disallow = schemas.get(page_type, {}).get("disallow_peer_of_artifact_dir") or []
@@ -1821,6 +1932,137 @@ def discover_bundle_roots():
                     d = slug / sub
                     if d.is_dir():
                         yield d
+    # Imported optimization experiments
+    experiments = ARTIFACTS_DIR / "experiments"
+    if experiments.is_dir():
+        for family in sorted(experiments.iterdir()):
+            if family.is_dir():
+                for experiment in sorted(family.iterdir()):
+                    if experiment.is_dir() and experiment.name.startswith("experiment-"):
+                        yield experiment
+
+
+def _generated_experiment_diff(before, after, before_name="before.py", after_name="after.py"):
+    """Reproduce the deterministic local experiment diff."""
+    import difflib
+
+    return "".join(
+        difflib.unified_diff(
+            before.splitlines(keepends=True),
+            after.splitlines(keepends=True),
+            fromfile=before_name,
+            tofile=after_name,
+        )
+    )
+
+
+def validate_experiment_bundle(bundle_root):
+    """Validate the local optimization-trace provenance and source pair."""
+    rel = bundle_root.relative_to(REPO_ROOT)
+    errors = []
+    prov_path = bundle_root / "PROVENANCE.yaml"
+    if not prov_path.is_file():
+        return [f"{rel}: experiment bundle missing PROVENANCE.yaml"]
+    try:
+        prov = yaml.safe_load(prov_path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        return [f"{rel}/PROVENANCE.yaml: YAML parse error: {exc}"]
+    if not isinstance(prov, dict):
+        return [f"{rel}/PROVENANCE.yaml: top-level must be a mapping"]
+    required = (
+        "source_kind", "logical_run_id", "imported_evidence_sha256",
+        "imported_manifest_row_sha256", "receipt_date", "receipt_date_policy",
+        "evidence_limitations", "files",
+    )
+    for field in required:
+        if field not in prov:
+            errors.append(f"{rel}/PROVENANCE.yaml: missing required '{field}'")
+    for forbidden in ("origin_url", "upstream_repo", "upstream_sha", "author", "license"):
+        if forbidden in prov:
+            errors.append(f"{rel}/PROVENANCE.yaml: experiment receipt must not invent '{forbidden}'")
+    if prov.get("source_kind") != "optimization-trace":
+        errors.append(f"{rel}/PROVENANCE.yaml: source_kind must be optimization-trace")
+    if prov.get("receipt_date") != "unknown" or prov.get("receipt_date_policy") != "evidence-preserved-unknown":
+        errors.append(f"{rel}/PROVENANCE.yaml: deterministic unknown receipt-date policy required")
+    for field in ("imported_evidence_sha256", "imported_manifest_row_sha256"):
+        if not re.fullmatch(r"[0-9a-f]{64}", str(prov.get(field, ""))):
+            errors.append(f"{rel}/PROVENANCE.yaml: {field} must be a lowercase SHA-256")
+
+    rows = prov.get("files")
+    if not isinstance(rows, list):
+        errors.append(f"{rel}/PROVENANCE.yaml: files must be a list")
+        rows = []
+    allowed_roles = {
+        "task", "before-code", "after-code", "unified-diff", "performance"
+    }
+    allowed_modes = {"copied-verbatim", "newline-normalized", "generated"}
+    declared = set()
+    role_paths = {}
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            errors.append(f"{rel}/PROVENANCE.yaml: files[{index}] must be a mapping")
+            continue
+        for field in ("local_path", "role", "mode", "size", "sha256"):
+            if field not in row:
+                errors.append(f"{rel}/PROVENANCE.yaml: files[{index}] missing '{field}'")
+        if row.get("role") not in allowed_roles:
+            errors.append(f"{rel}/PROVENANCE.yaml: files[{index}] has invalid role")
+        if row.get("mode") not in allowed_modes:
+            errors.append(f"{rel}/PROVENANCE.yaml: files[{index}] has invalid mode")
+        role = row.get("role")
+        mode = row.get("mode")
+        if role in {"before-code", "after-code"}:
+            if mode not in {"copied-verbatim", "newline-normalized"}:
+                errors.append(f"{rel}/PROVENANCE.yaml: files[{index}] code mode is invalid")
+            if row.get("normalization") != mode:
+                errors.append(f"{rel}/PROVENANCE.yaml: files[{index}] normalization must match code mode")
+        elif role in allowed_roles and mode != "generated":
+            errors.append(f"{rel}/PROVENANCE.yaml: files[{index}] generated payload has invalid mode")
+        if role in role_paths:
+            errors.append(f"{rel}/PROVENANCE.yaml: duplicate file role '{role}'")
+        local_path = row.get("local_path")
+        if not isinstance(local_path, str) or not local_path or Path(local_path).is_absolute() or ".." in Path(local_path).parts:
+            errors.append(f"{rel}/PROVENANCE.yaml: files[{index}] local_path is not contained")
+            continue
+        target = bundle_root / local_path
+        try:
+            resolved = target.resolve(strict=True)
+            if bundle_root.resolve() not in resolved.parents:
+                errors.append(f"{rel}/PROVENANCE.yaml: files[{index}] escapes bundle root")
+                continue
+        except OSError:
+            errors.append(f"{rel}/PROVENANCE.yaml: files[{index}] target does not exist")
+            continue
+        declared.add(resolved)
+        role_paths[role] = target
+        actual = target.read_bytes()
+        if row.get("size") != len(actual):
+            errors.append(f"{rel}/PROVENANCE.yaml: files[{index}] size mismatch")
+        if row.get("sha256") != sha256_of_file(target):
+            errors.append(f"{rel}/PROVENANCE.yaml: files[{index}] sha256 mismatch")
+    actual_payload = {path.resolve() for path in bundle_root.iterdir() if path.is_file() and path.name != "PROVENANCE.yaml"}
+    if actual_payload != declared:
+        errors.append(f"{rel}/PROVENANCE.yaml: payload manifest drift")
+
+    missing_roles = allowed_roles - set(role_paths)
+    if missing_roles:
+        errors.append(f"{rel}/PROVENANCE.yaml: missing file roles {sorted(missing_roles)}")
+
+    before_path = role_paths.get("before-code")
+    after_path = role_paths.get("after-code")
+    diff_path = role_paths.get("unified-diff")
+    if before_path and after_path and diff_path and before_path.is_file() and after_path.is_file() and diff_path.is_file():
+        before = before_path.read_text(encoding="utf-8")
+        after = after_path.read_text(encoding="utf-8")
+        if not before.strip() or not after.strip() or before == after:
+            errors.append(f"{rel}: before/after source pair must be complete and different")
+        expected = _generated_experiment_diff(before, after, before_path.name, after_path.name)
+        if diff_path.read_text(encoding="utf-8") != expected:
+            errors.append(
+                f"{rel}: {diff_path.name} is not reproducible from "
+                f"{before_path.name} and {after_path.name}"
+            )
+    return errors
 
 
 def find_orphan_source_files():
@@ -1855,6 +2097,8 @@ def find_orphan_source_files():
 
 def validate_bundle(bundle_root, known_source_ids):
     """Validate a single asset bundle root per plan AC-2/AC-9/AC-10."""
+    if bundle_root.relative_to(REPO_ROOT).parts[:2] == ("artifacts", "experiments"):
+        return validate_experiment_bundle(bundle_root)
     rel = bundle_root.relative_to(REPO_ROOT)
     errors = []
     prov_path = bundle_root / "PROVENANCE.yaml"

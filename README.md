@@ -45,7 +45,9 @@ export BLACKWELL_WIKI_ROOT=/path/to/KernelWiki
 
 - Source PR pages, synthesized wiki pages, blog/doc/contest summaries, candidate ledgers, query indices, and artifact bundles.
 - Verbatim upstream asset bundles under `artifacts/` (PR patches and complete kernel files or excerpts) — pinned to upstream SHAs via `PROVENANCE.yaml`.
-- Auto-generated cross-reference indices — [by architecture](queries/by-architecture.md) / problem / technique / hardware feature / repo / kernel type / language.
+- Local optimization-trace bundles under `artifacts/experiments/` — complete before/after source, reproducible diffs, measurements, and local hash receipts.
+- One readable source page and one kernel page per imported task family; experiment hashes stay in the artifact layer rather than user-facing filenames.
+- Auto-generated cross-reference indices — [by architecture](queries/by-architecture.md) / problem / technique / hardware feature / repo / kernel type / language / task family.
 - Reviewed candidate ledgers with include/defer/exclude decisions.
 - **Hybrid version-claim registry** ([`data/version-claims.yaml`](data/version-claims.yaml)) — per-page `version_sensitive: <id>` pointers + central registry, validated for bidirectional consistency
 - Run `python3 scripts/repo_status.py` for current corpus counts.
@@ -66,6 +68,7 @@ Examples:
 python3 scripts/query.py "ping-pong attention" --limit 5
 python3 scripts/query.py --tag UMMA --type hardware --compact          # alias → tcgen05
 python3 scripts/query.py --architecture B200 --type kernel             # alias → sm100
+python3 scripts/query.py --task-family "GDN prefill" --type kernel --has-code
 python3 scripts/get_page.py kernel-flash-attention-4 --follow-sources
 python3 scripts/grep_wiki.py "tcgen05" --only wiki
 ```
@@ -75,7 +78,7 @@ python3 scripts/grep_wiki.py "tcgen05" --only wiki
 - [`SKILL.md`](SKILL.md) — Skill entry point: when to engage, 5 navigation paths, output contract.
 - [`references/primer.md`](references/primer.md) — Topic map: hardware features, techniques, kernels, symptoms → canonical page IDs.
 - [`references/schema.md`](references/schema.md) — Frontmatter schema, confidence rules, reproducibility ladder, controlled vocabulary, canonical aliases.
-- [`references/examples.md`](references/examples.md) — 10 worked query patterns (user question → command sequence → synthesis).
+- [`references/examples.md`](references/examples.md) — worked query patterns (user question → command sequence → synthesis).
 - [`CLAUDE.md`](CLAUDE.md) — Extended schema + navigation reference for Claude Code.
 - [`index.md`](index.md) — Human-facing curated top-level index.
 
@@ -96,6 +99,7 @@ Supporting files:
 - `data/refresh-cutoff.yaml` — Internal refresh-round metadata used by validators
 - `candidates/` — Reviewed PR candidate ledgers (per repo)
 - `artifacts/` — Verbatim upstream asset bundles, each with `PROVENANCE.yaml`
+- `data/trace-import-ledger.jsonl` — deterministic trace disposition ledger
 
 ## Maintenance Tooling
 
@@ -105,6 +109,8 @@ Supporting files:
 | `scripts/generate-indices.py` | Regenerate `queries/*.md` from frontmatter |
 | `scripts/generate-pr-pages.py` | Batch-generate source PR pages from candidate ledgers |
 | `scripts/repo_status.py` | Print current corpus counts |
+| `scripts/import_trace_evidence.py` | Deterministic import from an explicit read-only trace root |
+| `scripts/check_self_contained.py` | Verify local links, locators, provenance hashes, diffs, and symlinks |
 
 ```bash
 python3 scripts/validate.py
@@ -123,6 +129,7 @@ These commands also work without PyYAML. Installing `requirements.txt` is option
 - `scripts/verify_core_prs.py` verifies generated PR manifests
 - `scripts/repo_size_check.py` enforces the repository size budget
 - 0 broken links across all internal references
+- Imported traces use conservative `experimental` confidence and direct positive old/new comparisons.
 - All `verified` wiki pages have official-doc + upstream-code evidence (enforced by `evidence_basis` field)
 - All technique/kernel/language pages have compilable code snippets (`reproducibility >= snippet`)
 - All Hopper-only wiki pages explain their `blackwell_relevance`; source pages preserve upstream evidence and are exempt
@@ -177,7 +184,8 @@ KernelWiki/                             (= ~/.claude/skills/KernelWiki/)
 │   ├── prs/{repo}/PR-{N}.md
 │   ├── contests/{contest}/
 │   ├── docs/
-│   └── blogs/
+│   ├── blogs/
+│   └── experiments/{task-family}.md
 │
 ├── wiki/                              # Layer 2: synthesized knowledge
 │   ├── hardware/
@@ -194,7 +202,8 @@ KernelWiki/                             (= ~/.claude/skills/KernelWiki/)
     ├── by-hardware-feature.md
     ├── by-repo.md
     ├── by-kernel-type.md
-    └── by-language.md
+    ├── by-language.md
+    └── by-task-family.md
 ```
 
 ## License

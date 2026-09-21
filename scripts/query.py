@@ -127,7 +127,7 @@ def score_keyword_match(fm, body, keywords):
         str(v) for k in ("tags", "techniques", "hardware_features", "kernel_types",
                           "languages", "aliases", "symptoms")
         for v in (fm.get(k) or [])
-    ).lower()
+    ).lower() + " " + str(fm.get("task_family", "")).lower()
     body_lower = body.lower()
     for kw in keywords:
         best_variant_score = 0
@@ -177,6 +177,12 @@ def filter_pages(pages, args):
             langs = set(fm.get("languages") or [])
             tags = set(fm.get("tags") or [])
             if args.language not in langs and args.language not in tags:
+                continue
+
+        if getattr(args, "task_family", None):
+            aliases = load_alias_expansions()
+            requested = aliases.get(args.task_family.lower(), args.task_family)
+            if str(fm.get("task_family", "")).lower() != str(requested).lower():
                 continue
 
         if args.architecture:
@@ -302,6 +308,8 @@ def format_result(page, compact=False):
         v = fm.get(k)
         if v:
             lines.append(f"- **{k}**: {v}")
+    if fm.get("task_family"):
+        lines.append(f"- **task_family**: {fm['task_family']}")
     if "performance_claims" in fm and isinstance(fm["performance_claims"], list):
         for claim in fm["performance_claims"][:2]:
             lines.append(f"- **perf**: {claim.get('value')} {claim.get('metric')} on {claim.get('gpu')} ({claim.get('dtype')}, {claim.get('shape')})")
@@ -313,10 +321,11 @@ def format_result(page, compact=False):
 def main():
     parser = argparse.ArgumentParser(description="Query the Blackwell kernel wiki")
     parser.add_argument("query", nargs="*", help="Free-text keywords")
-    parser.add_argument("--type", help="Filter by page type (kernel, technique, hardware, pattern, language, migration, pr, blog, doc, contest)")
+    parser.add_argument("--type", help="Filter by page type (kernel, technique, hardware, pattern, language, migration, pr, blog, doc, contest, experiment)")
     parser.add_argument("--tag", help="Filter by tag (must appear in tags/techniques/hardware_features/kernel_types/languages)")
     parser.add_argument("--repo", help="Filter by source repo (partial match, e.g. 'cutlass')")
     parser.add_argument("--language", help="Filter by language/DSL (cute-dsl, cuda-cpp, ptx, triton, etc.)")
+    parser.add_argument("--task-family", help="Filter by exact task family or a configured alias")
     parser.add_argument("--architecture", help="Filter by exact architecture, blackwell family hierarchy, or unknown")
     parser.add_argument("--symptom", help="Filter by pattern symptom (memory-bound, register-pressure, etc.)")
     parser.add_argument("--confidence", help="Filter by confidence (verified, source-reported, inferred, experimental)")

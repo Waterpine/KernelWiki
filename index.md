@@ -12,7 +12,7 @@ python3 scripts/get_page.py <page-id-or-path> [--follow-sources]
 python3 scripts/grep_wiki.py "<regex>" [--only wiki|sources]
 ```
 
-See [references/examples.md](references/examples.md) for 10 worked query patterns.
+See [references/examples.md](references/examples.md) for worked query patterns.
 
 ## Quick Navigation
 
@@ -25,6 +25,13 @@ See [references/examples.md](references/examples.md) for 10 worked query pattern
 | See what a repo contributed | [queries/by-repo.md](queries/by-repo.md) |
 | Write a specific kernel type | [queries/by-kernel-type.md](queries/by-kernel-type.md) |
 | Use a specific language/DSL | [queries/by-language.md](queries/by-language.md) |
+| Browse imported optimization experiments by task | [queries/by-task-family.md](queries/by-task-family.md) |
+
+Imported trace case studies can also be queried directly:
+
+```bash
+python3 scripts/query.py --task-family "GDN prefill" --type kernel --has-code
+```
 
 ## Hardware Features
 

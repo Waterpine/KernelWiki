@@ -22,7 +22,8 @@ See `SKILL.md` (skill entry point) and `references/examples.md` for query patter
 6. **By kernel type**: Read `queries/by-kernel-type.md` → find type → follow to kernel pages
 7. **By language**: Read `queries/by-language.md` → find DSL → follow to language page
 8. **By repo**: Read `queries/by-repo.md` → find repository → see all PRs
-9. **Deep dive**: From any wiki page, follow `sources:` IDs to raw source data
+9. **By task family**: Read `queries/by-task-family.md` → find imported experiments and case studies
+10. **Deep dive**: From any wiki page, follow `sources:` IDs to raw source data
 
 ## Three-Layer Architecture
 
@@ -32,6 +33,7 @@ Raw data. Each file has YAML frontmatter with a unique `id`.
 - `sources/contests/{contest}/*.md` — Competition problem definitions, organizer speed-of-light data, and dated leaderboard/results snapshots (no per-submission solutions)
 - `sources/docs/*.md` — Official-document and research-paper summaries (`source_category: official-doc` or `paper`); `sources/docs/images/` holds reproduced figure assets
 - `sources/blogs/*.md` — Community blog post summaries
+- `sources/experiments/{task-family}.md` — One family-level optimization-trace source index; hashed experiment identity remains in local artifact receipts
 
 ### Layer 2: Wiki (`wiki/`)
 Synthesized knowledge pages. Cross-referenced by `id`.
@@ -55,6 +57,7 @@ See `data/schemas.yaml` for full schema definitions. Summary:
 | source-doc | doc- | title, url, source_category, architectures, tags, retrieved_at |
 | source-blog | blog- | title, author, url, source_category, architectures, tags, retrieved_at |
 | source-contest | contest- | title, source_category, architectures, tags |
+| source-experiment | experiment-family- | title, source_category=optimization-trace, task_family, architectures, tags, techniques, kernel_types, languages, experiment_count, per-experiment hashes/artifact directories, performance_claims, correctness_status |
 | wiki-hardware | hw- | title, type=hardware, architectures, tags, confidence, related, sources, aliases |
 | wiki-technique | technique- | title, type=technique, architectures, tags, confidence, reproducibility(>=snippet), prerequisites, related, sources |
 | wiki-pattern | pattern- | title, type=pattern, tags, symptoms, candidate_techniques, related, sources |
@@ -74,6 +77,7 @@ Alias mappings in `data/aliases.yaml` map canonical terms to known synonyms:
 - `sm100` = B200 = GB200
 - `sm103` = B300 = GB300
 - `sm90` = Hopper = H100
+- Task-family aliases resolve only for exact `--task-family` filtering.
 
 ## Confidence Rules
 
@@ -110,6 +114,8 @@ performance_claims:
 
 - `scripts/validate.py` — Validates all frontmatter against `data/schemas.yaml`
 - `scripts/generate-indices.py` — Regenerates `queries/*.md` from frontmatter
+- `scripts/import_trace_evidence.py` — Imports an explicit read-only trace root; normal queries never use it
+- `scripts/check_self_contained.py` — Verifies local links, source IDs, bundle hashes/diffs, and forbidden source tokens
 - Setup: no Python package is required; scripts prefer host PyYAML and fall back to the bundled pure-Python implementation. `pip install -r requirements.txt` is optional.
 - Run: `python3 scripts/validate.py` then `python3 scripts/generate-indices.py`
 

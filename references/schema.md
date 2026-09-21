@@ -12,6 +12,7 @@ Every page has a unique `id` with a type-specific prefix:
 | source-doc | `doc-*` | Official NVIDIA docs, papers |
 | source-blog | `blog-*` | Community blog posts, tutorials |
 | source-contest | `contest-*` | Competition problems / tracks |
+| source-experiment | `experiment-family-*` | Family-level index over local optimization-trace bundles |
 | wiki-hardware | `hw-*` | Blackwell hardware feature pages |
 | wiki-technique | `technique-*` | Optimization techniques |
 | wiki-kernel | `kernel-*` | Kernel case studies with perf claims |
@@ -149,6 +150,26 @@ related: [pattern-compute-bound]
 sources: [...]
 ```
 
+### source-experiment
+
+Each imported task family has one source page. Its `experiments` list preserves
+the one-way logical run ID, logical selected code basename, evidence and
+manifest SHA-256 values, correctness status, and artifact directory for every
+accepted experiment. The top-level `artifact_dir` is the family directory
+under `artifacts/experiments/`; individual bundles remain below it.
+`performance_claims[*].experiment_id` identifies the bundle and its
+`source_locator` points to an exact heading in that bundle's local
+`performance.md`. `captured_at: unknown` is valid when the evidence does not
+preserve a capture date.
+
+Experiment `PROVENANCE.yaml` receipts use `source_kind: optimization-trace`,
+deterministic unknown-date policy, and role/mode/size/hash
+records for every payload. They do not carry invented upstream URLs,
+repositories, commits, authors, or licenses.
+Code payload modes distinguish exact `copied-verbatim` extraction from
+`newline-normalized` extraction; generated task, diff, and performance
+payloads use `generated`.
+
 ## Confidence Levels
 
 - **`verified`**: Requires ≥1 `official-doc` + ≥1 `upstream-code` in sources. Enforced by validator.
@@ -199,6 +220,7 @@ When asking about:
 - `related`: list of wiki page IDs that are topically related
 - `prerequisites`: list of wiki page IDs the reader should read first
 - `candidate_techniques` (pattern only): list of technique/hw/migration IDs that address the symptoms
+- `task_family`: controlled exact family used by imported source and kernel pages
 
 ## Blackwell-First Scope
 

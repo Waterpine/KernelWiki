@@ -23,7 +23,7 @@ The initial size was 24.72 MiB / 25 MiB and core manifests contained 252 PRs.
 | `python3 scripts/verify_core_prs.py` | 0 | pass | all 3 manifests byte-consistent; checksum `cde1aab41b70…`; 110 core PRs |
 | `python3 scripts/repo_size_check.py` | 0 | pass | 24.68 MiB across 1,601 reviewable files; 422 artifact files; ceiling 25 MiB |
 | `python3 scripts/generate-indices.py` | 0 | pass | 1,041 pages; all 7 query indices regenerated |
-| `python3 -m unittest discover -s tests -p 'test_*.py'` | 0 | pass | 158 tests |
+| `python3 -m unittest discover -s tests -p 'test_*.py'` | 0 | pass | 168 tests |
 | `bash tests/check_freshness_offline.sh` | 0 | pass | freshness checker remains network-free |
 | `git diff --check` | 0 | pass | no whitespace or conflict-marker errors |
 
@@ -40,6 +40,14 @@ Additional mandatory gates:
 
 This complete matrix is rerun after any accepted independent-review finding and
 again after the clean-round quorum.
+
+## Optimization-trace import addendum — 2026-09-20 UTC
+
+The repository now has 55 bundle manifests in total: 37 upstream-verbatim
+bundles governed by the historical strict verifier and 18 local
+optimization-trace bundles governed by `validate.py` and
+`check_self_contained.py`. Full post-import command results supersede the
+numeric pre-import matrix above where counts differ.
 
 Rounds 31 and 32 are consecutive exact-model clean reviews. The independent
 review quorum is complete at 2/2, and this matrix is the required final rerun

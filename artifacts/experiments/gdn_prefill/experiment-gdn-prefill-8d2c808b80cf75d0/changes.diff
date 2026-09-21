@@ -1,0 +1,335 @@
+--- before.py
++++ after.py
+@@ -1,13 +1,16 @@
+ """CuTe-DSL Gated Delta Net prefill kernel for Blackwell.
+ 
+-The recurrent state has independent value columns.  A CTA owns 32 columns of
+-one (sequence, value-head) state, with four columns per warp.  Each thread keeps
+-16 K-dimension values in registers for the entire sequence.  This makes the
+-work proportional to each sequence's true length instead of the batch maximum.
++The recurrent state has independent value columns.  A CTA owns eight columns
++of one (sequence, value-head) state, with two columns per warp.  Each thread
++keeps eight K-dimension values in registers for the entire sequence.  This
++makes the work proportional to each sequence's true length instead of the
++batch maximum.
+ """
+ 
+ from __future__ import annotations
+ 
++import sys
++from pathlib import Path
+ from typing import Dict, Tuple
+ 
+ import cuda.bindings.driver as cuda
+@@ -17,17 +20,31 @@
+ from cutlass.cute import EnableTVMFFI
+ from cutlass.cute.runtime import from_dlpack
+ 
++_SOLUTION_DIR = str(Path(__file__).resolve().parent)
++if _SOLUTION_DIR not in sys.path:
++    sys.path.insert(0, _SOLUTION_DIR)
++
++from gdn_c64 import run_chunked
++
+ 
+ _COMPILED: Dict[Tuple[int, int, torch.dtype, float], object] = {}
+ 
+ _HEAD_DIM = 128
+ _Q_HEADS = 4
+ _V_HEADS = 8
+-_V_PER_WARP = 4
+-_WARPS = 8
++_V_PER_WARP = 2
++_WARPS = 4
+ _V_PER_CTA = _V_PER_WARP * _WARPS
+-_K_PER_LANE = _HEAD_DIM // (32 // _V_PER_WARP)
++_K_LANES = 32 // _V_PER_WARP
++_K_PER_LANE = _HEAD_DIM // _K_LANES
++_REDUCE_OFFSETS = tuple(
++    _V_PER_WARP * (2**power) for power in range((_K_LANES.bit_length() - 2), -1, -1)
++)
+ _THREADS = 32 * _WARPS
++_GATE_THREADS = 256
++# The official cold-L2 CUPTI timer puts T=525 firmly on the chunk side
++# (0.378 ms versus 0.549 ms recurrent); recurrent wins through T=81.
++_CHUNK_DISPATCH_TOKENS = 128
+ 
+ 
+ class _GdnRecurrent:
+@@ -48,13 +65,19 @@
+     ):
+         tidx, _, _ = cute.arch.thread_idx()
+         bidx, _, _ = cute.arch.block_idx()
+-        linear = bidx * _THREADS + tidx
++        # Allow the recurrent grid to overlap its immutable state/QK prologue
++        # with this producer.  Its matching wait guards the first decay/beta
++        # read below the prologue.
++        cute.arch.griddepcontrol_launch_dependents()
++        linear = bidx * _GATE_THREADS + tidx
+         if linear < self.total_tokens * _V_HEADS:
+             head = linear % _V_HEADS
+             x = cutlass.Float32(a[linear]) + cutlass.Float32(dt_bias[head])
+             softplus = cutlass.Float32(0.0)
+             if x <= 20.0:
+-                softplus = cutlass.Float32(cute.log(1.0 + cute.exp(x)))
++                exp_x = cutlass.Float32(cute.exp(x))
++                log_input = cutlass.Float32(1.0 + exp_x)
++                softplus = cutlass.Float32(cute.log(log_input))
+             else:
+                 softplus = x
+ 
+@@ -62,7 +85,8 @@
+             decay[linear] = cute.exp(-rate * softplus)
+ 
+             raw_beta = cutlass.Float32(b[linear])
+-            beta[linear] = 1.0 / (1.0 + cute.exp(-raw_beta))
++            exp_neg_beta = cutlass.Float32(cute.exp(-raw_beta))
++            beta[linear] = cutlass.Float32(1.0 / (1.0 + exp_neg_beta))
+ 
+     @cute.kernel
+     def _recurrent(
+@@ -87,11 +111,25 @@
+         value_col = v_tile * _V_PER_CTA + warp * _V_PER_WARP + v_local
+         qk_head = value_head // 2
+ 
++        smem = cutlass.utils.SmemAllocator()
++        vector_layout = cute.make_layout((2, _HEAD_DIM), stride=(_HEAD_DIM, 1))
++        scalar_layout = cute.make_layout((2, 2), stride=(2, 1))
++        shared_k = smem.allocate_tensor(cutlass.BFloat16, vector_layout, 128)
++        shared_q = smem.allocate_tensor(cutlass.BFloat16, vector_layout, 128)
++        shared_scalars = smem.allocate_tensor(cutlass.Float32, scalar_layout, 128)
++
++        prefetched_qk = cute.make_rmem_tensor(
++            cute.make_layout((2,), stride=(1,)), cutlass.BFloat16
++        )
++        prefetched_gates = cute.make_rmem_tensor(
++            cute.make_layout((2,), stride=(1,)), cutlass.Float32
++        )
++
+         state_regs = cute.make_rmem_tensor(
+             cute.make_layout((_K_PER_LANE,), stride=(1,)), cutlass.Float32
+         )
+         for i in range(_K_PER_LANE):
+-            k_idx = i * (32 // _V_PER_WARP) + k_local
++            k_idx = i * _K_LANES + k_local
+             state_regs[i] = cutlass.Float32(
+                 initial_state[(sequence, value_head, value_col, k_idx)]
+             )
+@@ -100,55 +138,107 @@
+         end = cutlass.Int32(cu_seqlens[sequence + 1])
+         length = end - start
+ 
+-        for token_offset in cutlass.range(length, unroll=1):
+-            token = start + token_offset
+-            gate = cutlass.Float32(decay[(token, value_head)])
+-            update_gate = cutlass.Float32(beta[(token, value_head)])
+-
+-            old_value = cutlass.Float32(0.0)
+-            for i in range(_K_PER_LANE):
+-                k_idx = i * (32 // _V_PER_WARP) + k_local
+-                state_value = state_regs[i] * gate
+-                state_regs[i] = state_value
+-                old_value += state_value * cutlass.Float32(k[(token, qk_head, k_idx)])
+-
+-            for offset in (16, 8, 4):
+-                old_value += cute.arch.shuffle_sync_bfly(
+-                    old_value, offset=offset, mask=-1, mask_and_clamp=31
++        if length > 0:
++            # Prime token zero in stage zero.  The other stage is disjoint and
++            # can be filled while this one is consumed by the recurrence.
++            shared_k[(0, tidx)] = k[(start, qk_head, tidx)]
++            shared_q[(0, tidx)] = q[(start, qk_head, tidx)]
++            # Initial-state, sequence-metadata, and Q/K work above is
++            # independent of the gate producer.  Wait only at the first
++            # producer-owned decay/beta load; every CTA/thread reaches this
++            # boundary uniformly.
++            cute.arch.griddepcontrol_wait()
++            if tidx == 0:
++                shared_scalars[(0, 0)] = cutlass.Float32(
++                    decay[(start, value_head)]
+                 )
+-
+-            delta = cutlass.Float32(0.0)
+-            if k_local == 0:
+-                delta = update_gate * (
+-                    cutlass.Float32(v[(token, value_head, value_col)]) - old_value
++                shared_scalars[(0, 1)] = cutlass.Float32(
++                    beta[(start, value_head)]
+                 )
+-            delta = cute.arch.shuffle_sync(
+-                delta, v_local, mask=-1, mask_and_clamp=31
+-            )
+-
+-            out_value = cutlass.Float32(0.0)
+-            for i in range(_K_PER_LANE):
+-                k_idx = i * (32 // _V_PER_WARP) + k_local
+-                state_value = state_regs[i] + cutlass.Float32(
+-                    k[(token, qk_head, k_idx)]
+-                ) * delta
+-                state_regs[i] = state_value
+-                out_value += state_value * cutlass.Float32(
+-                    q[(token, qk_head, k_idx)]
++            cute.arch.barrier()
++
++            for token_offset in cutlass.range(length, unroll=1):
++                token = start + token_offset
++                stage = token_offset % 2
++                next_stage = 1 - stage
++                gate = shared_scalars[(stage, 0)]
++                update_gate = shared_scalars[(stage, 1)]
++                has_next = token_offset + 1 < length
++
++                # Issue next-token loads before the current recurrence and
++                # retain them in BF16 registers.  The previous iteration's
++                # CTA barrier made the disjoint next stage safe to reuse.  The
++                # final token reloads itself to retain a uniform hot loop.
++                next_token = token + cutlass.Int32(has_next)
++                prefetched_qk[0] = k[(next_token, qk_head, tidx)]
++                prefetched_qk[1] = q[(next_token, qk_head, tidx)]
++                if tidx == 0:
++                    prefetched_gates[0] = cutlass.Float32(
++                        decay[(next_token, value_head)]
++                    )
++                    prefetched_gates[1] = cutlass.Float32(
++                        beta[(next_token, value_head)]
++                    )
++
++                old_value = cutlass.Float32(0.0)
++                for i in range(_K_PER_LANE):
++                    k_idx = i * _K_LANES + k_local
++                    state_value = state_regs[i] * gate
++                    state_regs[i] = state_value
++                    old_value += state_value * cutlass.Float32(
++                        shared_k[(stage, k_idx)]
++                    )
++
++                for offset in _REDUCE_OFFSETS:
++                    old_value += cute.arch.shuffle_sync_bfly(
++                        old_value, offset=offset, mask=-1, mask_and_clamp=31
++                    )
++
++                delta = cutlass.Float32(0.0)
++                if k_local == 0:
++                    delta = update_gate * (
++                        cutlass.Float32(v[(token, value_head, value_col)])
++                        - old_value
++                    )
++                delta = cute.arch.shuffle_sync(
++                    delta, v_local, mask=-1, mask_and_clamp=31
+                 )
+ 
+-            for offset in (16, 8, 4):
+-                out_value += cute.arch.shuffle_sync_bfly(
+-                    out_value, offset=offset, mask=-1, mask_and_clamp=31
+-                )
+-
+-            if k_local == 0:
+-                output[(token, value_head, value_col)] = cutlass.BFloat16(
+-                    out_value * self.scale
+-                )
++                out_value = cutlass.Float32(0.0)
++                for i in range(_K_PER_LANE):
++                    k_idx = i * _K_LANES + k_local
++                    state_value = (
++                        state_regs[i]
++                        + cutlass.Float32(shared_k[(stage, k_idx)]) * delta
++                    )
++                    state_regs[i] = state_value
++                    out_value += state_value * cutlass.Float32(
++                        shared_q[(stage, k_idx)]
++                    )
++
++                for offset in _REDUCE_OFFSETS:
++                    out_value += cute.arch.shuffle_sync_bfly(
++                        out_value, offset=offset, mask=-1, mask_and_clamp=31
++                    )
++
++                if k_local == 0:
++                    output[(token, value_head, value_col)] = cutlass.BFloat16(
++                        out_value * self.scale
++                    )
++
++                # Publish into the already-free stage after current-stage
++                # consumption.  One barrier serves both roles: all warps have
++                # relinquished the current stage, and the next stage is now
++                # visible.
++                shared_k[(next_stage, tidx)] = prefetched_qk[0]
++                shared_q[(next_stage, tidx)] = prefetched_qk[1]
++                if tidx == 0:
++                    shared_scalars[(next_stage, 0)] = prefetched_gates[0]
++                    shared_scalars[(next_stage, 1)] = prefetched_gates[1]
++                cute.arch.barrier()
+ 
+         for i in range(_K_PER_LANE):
+-            k_idx = i * (32 // _V_PER_WARP) + k_local
++            k_idx = i * _K_LANES + k_local
+             final_state[(sequence, value_head, value_col, k_idx)] = state_regs[i]
+ 
+     @cute.jit
+@@ -241,11 +331,12 @@
+ 
+         self._prepare_gates(a, b, a_log, dt_bias, decay_flat, beta_flat).launch(
+             grid=(
+-                cute.ceil_div(self.total_tokens * _V_HEADS, _THREADS),
++                cute.ceil_div(self.total_tokens * _V_HEADS, _GATE_THREADS),
+                 1,
+                 1,
+             ),
+-            block=(_THREADS, 1, 1),
++            block=(_GATE_THREADS, 1, 1),
++            use_pdl=True,
+             stream=stream,
+         )
+         self._recurrent(
+@@ -261,6 +352,8 @@
+         ).launch(
+             grid=(_HEAD_DIM // _V_PER_CTA, _V_HEADS, self.num_sequences),
+             block=(_THREADS, 1, 1),
++            min_blocks_per_mp=2,
++            use_pdl=True,
+             stream=stream,
+         )
+ 
+@@ -274,6 +367,20 @@
+     total_tokens = q.shape[0]
+     num_sequences = state.shape[0]
+     scale_value = float(scale) if scale else 1.0 / (_HEAD_DIM**0.5)
++
++    if total_tokens >= _CHUNK_DISPATCH_TOKENS:
++        return run_chunked(
++            q,
++            k,
++            v,
++            state,
++            A_log,
++            a,
++            dt_bias,
++            b,
++            cu_seqlens,
++            scale_value,
++        )
+ 
+     output = torch.empty_like(v)
+     final_state = torch.empty_like(state)
+@@ -310,7 +417,7 @@
+         )
+         _COMPILED[key] = compiled
+ 
+-    compiled(
++    runtime_args = (
+         q.data_ptr(),
+         k.data_ptr(),
+         v.data_ptr(),
+@@ -324,6 +431,11 @@
+         beta.data_ptr(),
+         output.data_ptr(),
+         final_state.data_ptr(),
+-        stream=stream,
+     )
++    # CuTe 4.5.1's generated wrapper accepts the runtime stream positionally.
++    # CuTe 4.6 accepts the explicit keyword used by its generated entrypoints.
++    if str(getattr(cutlass, "__version__", "")).startswith("4.5.1"):
++        compiled(*runtime_args, stream)
++    else:
++        compiled(*runtime_args, stream=stream)
+     return output, final_state
