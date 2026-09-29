@@ -77,32 +77,28 @@ snapshot and PR tests are required to exercise the path.
 
 The separate `dsa_attention_official` CuTe run supplies a measured
 top-k sparse-attention A→B→C sequence. Before the performance changes, its
-archived seed produced roughly 40× only on **7/23 passing** workloads. Commit
-`ff880451cd` kept FP32 partials through the merge and split high/low P in PV;
-the next full run passed 23/23 at 27.7786× mean speedup. The failing 40× is
-not a valid predecessor score.
+saved [seed](../../data/internal-b300/dsa/before-correctness-fix.jsonl)
+produced roughly 40× only on **7/23 passing** workloads. The correctness
+repair kept FP32 partials through the merge and split high/low P in PV; the
+[next full run](../../data/internal-b300/dsa/after-correctness-fix.jsonl)
+passed 23/23 at 27.7786× mean speedup. The failing 40× is not a valid
+predecessor score.
 
 | Passing B300 23-case suite | Mean speedup vs reference | Change |
 |---|---:|---|
-| A, `dev/ab_base.jsonl` | 28.1316× | FP32 partials, 128 small DSMEM pushes per row |
-| B, `dev/ab_bulk.jsonl` | 29.6105× | One 2 KiB `cp.async.bulk` shared-to-cluster push per consumer |
-| C, `dev/ab_r3b.jsonl` | 30.8641× | Relaxed empty synchronization and skip proven zero PV K steps |
+| [A](../../data/internal-b300/dsa/attention-a.jsonl) | 28.1316× | FP32 partials, 128 small DSMEM pushes per row |
+| [B](../../data/internal-b300/dsa/attention-b.jsonl) | 29.6105× | One 2 KiB `cp.async.bulk` shared-to-cluster push per consumer |
+| [C](../../data/internal-b300/dsa/attention-c.jsonl) | 30.8641× | Relaxed empty synchronization and skip proven zero PV K steps |
 
-B (`67aa045c11`) fences shared-memory proxy visibility, then maps the
+B fences shared-memory proxy visibility, then maps the
 destination mbarrier to the consumer CTA before the bulk transfer. C
-(`3c37568a90`) uses relaxed cluster arrival and relaxed empty-flag posts only
+uses relaxed cluster arrival and relaxed empty-flag posts only
 where there is no data payload to publish. Its PV loop skips K steps only
 when packed valid-row counts prove they contribute zero; it preserves a
 straight-line loop for full tiles because per-step guards had slowed them.
 On dense T=8 workload `564007ac`, kernel time was
 **11.552→10.720→10.656 µs**. All three saved A/B/C runs passed 23/23.
 
-These are local B300 observations, distinct from PR 2441's benchmark. The
-local archive root is `/users/Master/kda-internal-agent-session-history`.
-Its Git mirror (`extract-git-history/kda-history.git`) holds the paired
-`dev/ab_base.jsonl`, `dev/ab_bulk.jsonl` and `dev/ab_r3b.jsonl` files at
-`9c2184982f`, the correctness repair at `ff880451cd`, and the bulk-copy and
-PV changes at `67aa045c11` and `3c37568a90`. The session object is
-`extract-runs-clean/tasks/dsa_attention_official/objects/cc/ccc445725491e6d827ade2f91761aefbebe5e9c3af5ac1c7aa1f4ccff130477f.jsonl`;
-its run ID is
-`runs/projects-experiments/kda-dsafix-official-18h/dsa_attention_official/goal/claude_fable5_max_dsafix/0`.
+These B300 observations are distinct from PR 2441's benchmark. Each linked
+A/B/C snapshot contains the full 23-case result, including per-case latency
+and correctness.

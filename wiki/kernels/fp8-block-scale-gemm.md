@@ -57,12 +57,12 @@ for this kernel class.
 
 ## Local B300 trajectory: fuse activation scale packing into a large GEMM
 
-In the archived `dense_kernel_01_sm100_fp8_fp4_block_scaled_dense_gemm` run,
+In the saved B300 block-scaled dense GEMM run,
 **kernel A** launched a Triton scale-pack kernel to convert live FP32 activation
 scales into packed E8M0 words, then launched the two-CTA CuTe GEMM. **Kernel B**
-(source commit `f7a210d`, mirrored code commit `9f962c12db`) moves that pack
-into the resident GEMM grid for `M >= 256`. Each CTA packs a disjoint set of
-scale words; an `async.global` proxy fence and a GPU-scope count/epoch barrier
+moves that pack into the resident GEMM grid for `M >= 256`. Each CTA packs a
+disjoint set of scale words; an `async.global` proxy fence and a GPU-scope
+count/epoch barrier
 publish all words before the existing TMA mainloop reads them. The launch uses
 148 CTAs, or 74 two-CTA clusters, matching the measured B300 residency cap.
 The M64 path retains the separate pack because the fused path was neutral
@@ -77,17 +77,7 @@ for the reusable count and epoch.
 The accepted large/all score rose from **1.6261× to 1.6780×** against the
 task baseline; correctness passed 1/1. This A→B gain comes from removing a
 launch and reusing the resident GEMM grid while preserving the same packed
-scale input to TMA. The local NCU run returned `ERR_NVGPUCTRPERM`, so the
-archive does not establish a counter-based stall explanation.
-
-The local archive root is
-`/users/Master/kda-internal-agent-session-history`. In its rewritten Git
-mirror (`extract-git-history/kda-history.git`), the A/B report is
-`d659617f00:profiles/cute_fused_pack_ab_run_001/REPORT.md`; the code change
-is `9f962c12db:solution/cute_blockscaled_sm100.py` and
-`9f962c12db:solution/kernel.py`. The session object is
-`extract-runs-clean/tasks/dense_kernel_01_sm100_fp8_fp4_block_scaled_dense_gemm/objects/d3/d3386d2796df2376c0dd5b526efde02ec6380544f6e5ea730ed1b57c3eb23744.jsonl`.
-Its run ID in `extract-runs-clean/occurrences.jsonl` is
-`runs/projects-improve-infra/deepgemm-sm100-codex-gpt56sol-max-single-seed-sm103-24h-20260724/dense_kernel_01_sm100_fp8_fp4_block_scaled_dense_gemm/goal/codex_gpt56sol_max/0`.
-These are local B300 results, separate from the H800 DeepGEMM headline in
+scale input to TMA. The [saved paired A/B report](../../data/internal-b300/fp8-block-scale-gemm/paired-ab-report.md)
+records the trial medians, confidence intervals, M64 control and correctness
+checks. These B300 results are separate from the H800 DeepGEMM headline in
 this page's frontmatter.

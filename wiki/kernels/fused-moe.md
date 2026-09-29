@@ -56,8 +56,7 @@ same device kernel.
 ## Local B300 trajectory: larger expert GEMM tiles at high token counts
 
 In a saved DeepSeek-V3 FP8 block-scale MoE run, **v5.3** repeatedly read
-weights for M sub-tiles; its investigation recorded 12.2 GB of GEMM1 L2 reads
-and 6.06 GB for GEMM2. **v6** (`2df4993076`) dispatches both expert GEMMs to
+weights for M sub-tiles. **v6** dispatches both expert GEMMs to
 `BM=256` at `T >= 11948`, with eight warps and split=8 for GEMM1 and split=1
 for GEMM2. Smaller T keeps the `BM=64` path to avoid large-tile fixed cost.
 The change amortizes weight reads across more routed rows.
@@ -69,28 +68,17 @@ The change amortizes weight reads across more routed rows.
 | 32,768 | 2383.8 µs | 1739.6 µs | 27.0% |
 
 All 20 saved workloads passed. These are matched-shape **candidate kernel
-times** from the full runs at `d9b79bfd3b` and `00303ae1ed`. Their aggregate
-geomean scores cannot be compared as an overall improvement: small-case
+times** from the saved [v5.3](../../data/internal-b300/fused-moe/full-a.jsonl)
+and [v6](../../data/internal-b300/fused-moe/full-b.jsonl) full runs. Their
+aggregate geomean scores cannot be compared as an overall improvement: small-case
 reference times varied between runs, and the recorded geomean changed from
 2.1209× to 1.8368×. The evidence supports the large-T timing improvement;
 the exact threshold should be remeasured on a new target GPU.
 
-The same run had an earlier routing-only change (`0da9352e42`): replace a
-per-expert count loop with `tl.histogram`. Routing T=1 fell from 33.7 to
-23.4 µs in the session, while the four-case end-to-end fast run improved its
-T=1 row from 112.35 to 106.08 µs. The smaller end-to-end gain shows why a
-routing microbenchmark must not stand in for the full MoE pipeline.
-
-The local archive root is
-`/users/Master/kda-internal-agent-session-history`. Its Git mirror at
-`extract-git-history/kda-history.git` holds the v5.3 and v6 full runs at
-`d9b79bfd3b:bench_results/moe_full_20260813T160944Z.jsonl` and
-`00303ae1ed:bench_results/moe_full_20260813T180347Z.jsonl` (19 official
-rows plus one live large row per file), the `BM=256` change at `2df4993076`,
-the L2 profiling notes at `646220cee9`, and the routing A/B fast rows at
-`0da9352e42:bench_results/moe_fast_20260813T075726Z.jsonl` and
-`0da9352e42:bench_results/moe_fast_20260813T080918Z.jsonl`. The session
-object is
-`extract-runs-clean/tasks/moe/objects/57/57c10ba5e6d98e917b48b99f086385032b38ee37257b867eba9afc6e2c2f5e44.jsonl`;
-the run ID is
-`runs/projects-experiments/kda-dsa-moe-gdn-deepseek-cuda-triton-24h/moe/ralph_loop/deepseek_v4_cc_triton/0`.
+An earlier routing change replaced the per-expert count loop with
+`tl.histogram`. Its T=1 end-to-end fast row improved from **112.35 to
+106.08 µs** in the saved [before](../../data/internal-b300/fused-moe/routing-a.jsonl)
+and [after](../../data/internal-b300/fused-moe/routing-b.jsonl) runs. Both full
+runs contain 19 official rows plus one live large row; the routing fast runs
+contain four rows each. The end-to-end result is the relevant measure of the
+routing change's effect on the pipeline.

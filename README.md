@@ -44,7 +44,7 @@ export BLACKWELL_WIKI_ROOT=/path/to/KernelWiki
 ## What's Here
 
 - Source PR pages, synthesized wiki pages, blog/doc/contest summaries, candidate ledgers, query indices, and artifact bundles.
-- Local B300 A → B case studies are embedded in the relevant kernel pages. Their short Git hashes identify commits in the rewritten `kda-history.git` mirror; `extract-git-history/metadata/commits.csv` in the separate local archive maps these back to source commits.
+- Local B300 A → B case studies are embedded in the relevant kernel pages, with their saved benchmark records in [`data/internal-b300/`](data/internal-b300/).
 - Verbatim upstream asset bundles under `artifacts/` (PR patches and complete kernel files or excerpts) — pinned to upstream SHAs via `PROVENANCE.yaml`.
 - Auto-generated cross-reference indices — [by architecture](queries/by-architecture.md) / problem / technique / hardware feature / repo / kernel type / language.
 - Reviewed candidate ledgers with include/defer/exclude decisions.
