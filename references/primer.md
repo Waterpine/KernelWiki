@@ -56,14 +56,16 @@ All page IDs below resolve via `get_page.py <id>`. All paths are relative to the
 | DeepGEMM (FP8) | `kernel-deepgemm` | ~1550 TFLOPS H800 FP8 | Fine-grained scaling, CUDA-core promotion (Nc=128) |
 | NVFP4 GEMM | `kernel-nvfp4-gemm` | — | tcgen05 + per-16 FP8 scales (task prose: E4M3FNUZ; reference code: `torch.float8_e4m3fn`); PTX `UE4M3` is distinct, as is MXFP4's block-32 `UE8M0` |
 | NVFP4 batched GEMV | `kernel-nvfp4-gemv` | Author reports a 22.392 µs final aggregate after a multi-step tuning sequence | Memory access, PTX, cache policy, instruction-level parallelism |
-| FP8 block-scale GEMM | `kernel-fp8-block-scale-gemm` | — | 1×128 / 128×128 block scaling scheme |
-| Fused MoE | `kernel-fused-moe` | — | Gate-up fused with SwiGLU; FP8 block scale routing |
+| FP8 block-scale GEMM | `kernel-fp8-block-scale-gemm` | B300 M=4096: 48.461→47.018 µs (paired local run) | Cooperative GEMM packs activation scales; count/epoch barrier |
+| Fused MoE | `kernel-fused-moe` | B300 T=14,107: 1282.6→964.8 µs (local run) | `BM=256` expert GEMMs for large T; less weight rereading |
 | Gated Dual GEMM | `kernel-gated-dual-gemm` | — | Gate × Up → SiLU fused in epilogue |
 | Grouped GEMM for MoE | `kernel-grouped-gemm` | — | Variable-sized expert GEMMs in one launch |
 | FlashMLA | `kernel-flashmla` | DeepSeek V3 decode | MLA-specific TMA + tcgen05 layout |
 | Sparse MLA | `kernel-sparse-mla` | DeepSeek V3.2 | Sparse KV retrieval before MLA core |
 | Native Sparse Attention (NSA) | `kernel-nsa` | 9× fwd speedup | Block-sparse + compressed attention |
-| Gated Delta Net | `kernel-gated-delta-net` | — | Chunk parallelism; linear attention |
+| Gated Delta Net prefill | `kernel-gated-delta-net` | B300 T=6: 11.584→8.320→7.344 µs (local run) | Single-launch tiny path; eight-warp MMA |
+| KDA backward (related case) | `kernel-gated-delta-net` | B300 six-case geomean: 1.1073→1.7696× (local run) | CuTe K0, cached host plan, K-split removal |
+| DSA sparse attention (local case) | `kernel-flash-attention-sm100-mla-topk` | B300 23-case mean: 28.1316→29.6105→30.8641× | 2 KiB bulk cluster copy; skip proven-zero PV steps |
 
 ---
 

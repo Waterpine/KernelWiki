@@ -53,9 +53,11 @@ See [references/examples.md](references/examples.md) for 10 worked query pattern
 
 - [kernel-flash-attention-4](wiki/kernels/flash-attention-4.md) — FlashAttention-4 (up to 1613 TFLOPS on B200 in the paper's benchmark sweep)
 - [kernel-deepgemm](wiki/kernels/deepgemm.md) — DeepGEMM FP8 GEMM (1550 TFLOPS on H800)
+- [kernel-fp8-block-scale-gemm](wiki/kernels/fp8-block-scale-gemm.md) — FP8 block scaling, including the measured B300 scale-pack fusion
 - [kernel-flashmla](wiki/kernels/flashmla.md) — FlashMLA sparse/dense MLA decoding
 - [kernel-nsa](wiki/kernels/nsa.md) — Native Sparse Attention (9x fwd speedup)
-- [kernel-gated-delta-net](wiki/kernels/gated-delta-net.md) — Gated Delta Net linear attention
+- [kernel-flash-attention-sm100-mla-topk](wiki/kernels/flash-attention-sm100-mla-topk.md) — sparse MLA TopK and the measured B300 DSA trajectory
+- [kernel-gated-delta-net](wiki/kernels/gated-delta-net.md) — Gated Delta Net prefill and related KDA backward case studies
 - [kernel-nvfp4-gemm](wiki/kernels/nvfp4-gemm.md) — NVFP4 GEMM from GPU Mode hackathon
 - [kernel-nvfp4-gemv](wiki/kernels/nvfp4-gemv.md) — NVFP4 batched GEMV optimization
 - [kernel-grouped-gemm](wiki/kernels/grouped-gemm.md) — Grouped GEMM for MoE
