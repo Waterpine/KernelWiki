@@ -88,3 +88,11 @@ B300 prefill [A](../../data/internal-b300/gated-delta-net/prefill-a.jsonl),
 and [B](../../data/internal-b300/gated-delta-net/backward-b.jsonl) runs each
 contain six rows. These B300 measurements are distinct from the SGLang
 projection-fusion H200 example above.
+
+## Audited full-suite kernel
+
+The later [selected GDN prefill implementation](../../artifacts/kernels/kda-mlsys26-final/full/kernels/gdn_prefill/kernel.py)
+and its sibling modules passed the 100-workload B300 suite at 15.1598×
+arithmetic-mean speedup. The [selection and provenance notes](../../data/internal-b300/mlsys26-final.md)
+summarize the full-suite result. The A/B/C sequence above measures a 34-case
+development suite and does not identify this final kernel.

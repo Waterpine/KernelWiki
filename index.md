@@ -51,6 +51,12 @@ See [references/examples.md](references/examples.md) for 10 worked query pattern
 
 ## Kernel Case Studies
 
+The [audited MLSys26 B300 snapshots](wiki/kernels/kda-mlsys26-final.md)
+include complete GDN prefill, DSA attention, and FP8 MoE implementations and
+their full-suite score summaries. The case studies below retain the earlier
+optimization trajectories.
+
+- [kernel-kda-mlsys26-final](wiki/kernels/kda-mlsys26-final.md) — audited final GDN prefill, DSA, and FP8 MoE kernels on B300
 - [kernel-flash-attention-4](wiki/kernels/flash-attention-4.md) — FlashAttention-4 (up to 1613 TFLOPS on B200 in the paper's benchmark sweep)
 - [kernel-deepgemm](wiki/kernels/deepgemm.md) — DeepGEMM FP8 GEMM (1550 TFLOPS on H800)
 - [kernel-fp8-block-scale-gemm](wiki/kernels/fp8-block-scale-gemm.md) — FP8 block scaling, including the measured B300 scale-pack fusion

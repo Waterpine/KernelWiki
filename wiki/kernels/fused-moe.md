@@ -82,3 +82,11 @@ and [after](../../data/internal-b300/fused-moe/routing-b.jsonl) runs. Both full
 runs contain 19 official rows plus one live large row; the routing fast runs
 contain four rows each. The end-to-end result is the relevant measure of the
 routing change's effect on the pipeline.
+
+## Audited full-suite kernel
+
+The later [selected FP8 MoE implementation](../../artifacts/kernels/kda-mlsys26-final/full/kernels/moe/kernel.py)
+and its sibling modules passed all 19 B300 official workloads at 2.2227×
+arithmetic-mean speedup. The [selection and provenance notes](../../data/internal-b300/mlsys26-final.md)
+identify the audited snapshot. The earlier v5.3/v6 section compares a
+different experiment and metric.

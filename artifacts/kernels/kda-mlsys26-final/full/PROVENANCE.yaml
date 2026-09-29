@@ -1,0 +1,101 @@
+origin_url: ../../../../data/internal-b300/mlsys26-final.md
+upstream_repo: humanfia/mlsys-contest-cute
+upstream_sha: 1d6d4114a2717bd2d588cfaf9a5f17cf0aa8d93f
+archive_repository_id: kernel-design-agents/mlsys-contest-cute
+archive_snapshot: 2026-08-21
+license: No top-level license in archived source; embedded third-party notices retained
+retrieved_at: '2026-09-29'
+asset_mode: verbatim
+size_cap_truncated: false
+selection: archived main after 2026-08-18 rules-clean audit
+files:
+- local_path: kernels/dsa_attention/kernel.py
+  upstream_path: kernels/dsa_attention/kernel.py
+  role: upstream-file
+  mode: verbatim
+  sha256: f8523ec43e4cc6d2c67968465e450ff61f7bcd1d230d42d8545dda6770b83f90
+- local_path: kernels/gdn_prefill/__init__.py
+  upstream_path: kernels/gdn_prefill/__init__.py
+  role: upstream-file
+  mode: verbatim
+  sha256: e48ab5fb1ec30b1e04449d32c01f0db00ffd0a4b69252cae3ea2e7c84982276e
+- local_path: kernels/gdn_prefill/gdn_core.py
+  upstream_path: kernels/gdn_prefill/gdn_core.py
+  role: upstream-file
+  mode: verbatim
+  sha256: 72ca2daae6c6fca73b5a341735fe47e53d006c8c90bdd081718375eb4cc5cb0a
+- local_path: kernels/gdn_prefill/gdn_runtime.py
+  upstream_path: kernels/gdn_prefill/gdn_runtime.py
+  role: upstream-file
+  mode: verbatim
+  sha256: 881c6f534b8682e7f1b8132101c2071517e492eede7be85008acb84c783066e9
+- local_path: kernels/gdn_prefill/gdn_small.py
+  upstream_path: kernels/gdn_prefill/gdn_small.py
+  role: upstream-file
+  mode: verbatim
+  sha256: c46c1109d372f24d5252ee1559508ebd7849fb4a3b4db83e1c0575e220eef797
+- local_path: kernels/gdn_prefill/gdn_tile_scheduler.py
+  upstream_path: kernels/gdn_prefill/gdn_tile_scheduler.py
+  role: upstream-file
+  mode: verbatim
+  sha256: 1798170ba5e6be18a2a1be3f6792a7cf829f46d1ff3107df031fd9eac45ea607
+- local_path: kernels/gdn_prefill/kernel.py
+  upstream_path: kernels/gdn_prefill/kernel.py
+  role: upstream-file
+  mode: verbatim
+  sha256: 04ea7c554580a7b023bfe9de84b28a41bc6c0966316c3ec71ff6684516ec7c8c
+- local_path: kernels/moe/kernel.py
+  upstream_path: kernels/moe/kernel.py
+  role: upstream-file
+  mode: verbatim
+  sha256: 74e396afb3473d8e12b0dbec68aef8782fa9748c09405f1c6465e50c59edf6ff
+- local_path: kernels/moe/moe_dsl.py
+  upstream_path: kernels/moe/moe_dsl.py
+  role: upstream-file
+  mode: verbatim
+  sha256: 112211937a31d87edf822ee7b4812eae81cf200409e1b0bd56ced600f0a73864
+- local_path: kernels/moe/moe_gemm.py
+  upstream_path: kernels/moe/moe_gemm.py
+  role: upstream-file
+  mode: verbatim
+  sha256: f9f87618332c489bb483583bda47c22dcdbbb83f749a4a954d9deae9e8c394eb
+- local_path: kernels/moe/moe_gemm_2sm.py
+  upstream_path: kernels/moe/moe_gemm_2sm.py
+  role: upstream-file
+  mode: verbatim
+  sha256: 596b091482a8f46b401bca4fb3c82ca325432dc53df71d5edac1926fcf26de47
+- local_path: kernels/moe/moe_gemm_fused.py
+  upstream_path: kernels/moe/moe_gemm_fused.py
+  role: upstream-file
+  mode: verbatim
+  sha256: 1dee487e5dfc4cc55d4e2cd9fd3e93de4eb56eb9f8f872713fe87a2bf95607c7
+- local_path: kernels/moe/moe_gemm_fused_mx.py
+  upstream_path: kernels/moe/moe_gemm_fused_mx.py
+  role: upstream-file
+  mode: verbatim
+  sha256: 4502b006b2eb20e7e83b27460066237a1b223f5792906a87d0dc07ebb63d4f55
+- local_path: kernels/moe/moe_gemm_mx.py
+  upstream_path: kernels/moe/moe_gemm_mx.py
+  role: upstream-file
+  mode: verbatim
+  sha256: ef6a9c4bb486aa86aba1f97097c7291b1e3a4e0d52710c67badf147cb942ced1
+- local_path: kernels/moe/moe_gemm_mx2.py
+  upstream_path: kernels/moe/moe_gemm_mx2.py
+  role: upstream-file
+  mode: verbatim
+  sha256: ae9ac7423156609210115bc0b0f4e4082f5a5290d03d27fd7fab7e1da8ffe442
+- local_path: kernels/moe/moe_gemm_small.py
+  upstream_path: kernels/moe/moe_gemm_small.py
+  role: upstream-file
+  mode: verbatim
+  sha256: fe6013abe0f1d7bac7a7633ec38f2d1c16cf807d644e44e74b708c50f6ae85c4
+- local_path: kernels/moe/moe_mx.py
+  upstream_path: kernels/moe/moe_mx.py
+  role: upstream-file
+  mode: verbatim
+  sha256: 9fe70e72b85478893b7581ee353dab06d97458350ed7f291d310610f8869fb32
+- local_path: kernels/moe/moe_pipeline.py
+  upstream_path: kernels/moe/moe_pipeline.py
+  role: upstream-file
+  mode: verbatim
+  sha256: 1a0add17d3788942457b2671c5d6602341ee1b2baf9babf3bd60039e333b168a

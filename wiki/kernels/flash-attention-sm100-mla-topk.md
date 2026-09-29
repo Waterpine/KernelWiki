@@ -102,3 +102,11 @@ On dense T=8 workload `564007ac`, kernel time was
 These B300 observations are distinct from PR 2441's benchmark. Each linked
 A/B/C snapshot contains the full 23-case result, including per-case latency
 and correctness.
+
+## Audited full-suite kernel
+
+The later [selected DSA implementation](../../artifacts/kernels/kda-mlsys26-final/full/kernels/dsa_attention/kernel.py)
+passed all 23 B300 workloads at 37.6827× arithmetic-mean speedup. The
+[selection and provenance notes](../../data/internal-b300/mlsys26-final.md)
+identify the audited snapshot. The A/B/C sequence above records earlier
+optimization steps.
